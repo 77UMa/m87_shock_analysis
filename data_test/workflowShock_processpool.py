@@ -472,7 +472,7 @@ import plotly.graph_objects as go
 import pandas as pd # Optional, but often convenient
 
 def visualize_shock_3d_interactive_html(roi_data, shock_properties, snapshot_name, html_plot_filename,
-                                        x_lim=150.0, y_lim=150.0, z_lim=1200.0): # 新增范围参数
+                                        x_lim=260.0, y_lim=260.0, z_lim=1200.0): # 新增范围参数
     """
     【Interactive HTML 3D版 v2】
     - 绘制指定半径范围内 (r < r_max_vis) 所有激波格点的3D散点图。
@@ -536,11 +536,13 @@ def visualize_shock_3d_interactive_html(roi_data, shock_properties, snapshot_nam
         z=z_shocks_filtered,
         mode='markers',
         marker=dict(
-            size=1,
+            size=2,
             color=mach_shocks_filtered,
             colorscale='Plasma',
-            opacity=0.5,
-            colorbar=dict(title='Upstream Mach ($M_1$)')
+            opacity=0.7,
+            colorbar=dict(title='Upstream Mach ($M_1$)'),
+            cmin=1.0,
+            cmax=2.0
         )
     )])
 
