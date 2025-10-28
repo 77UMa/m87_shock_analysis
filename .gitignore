@@ -1,0 +1,38 @@
+# Data files and Checkpoints
+*.athdf
+*.npz
+*.h5 
+# (如果 ipole 输出的 HDF5 需要版本控制，请移除上面这行)
+
+# Output Images / HTML
+*.png
+*.jpg
+*.html
+*.pdf
+*.par
+*.txt
+*.sh
+*.c
+*.h
+*.o
+*.make
+
+# Python cache and environment files
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.vscode/
+venv/
+*.egg-info/
+
+# Large directories (if they contain only data/output)
+full_data_checkpoints/
+analysis_checkpoints/
+shock_visuals*/
+workflow_output*/
+sliced_data_checkpoints/
+ipole*/
+pyathena*/
+old/
+# Specific large files
+# (如有其他需要忽略的大文件，在此添加)
