@@ -47,7 +47,7 @@ try:
     import ipole as ipole_api
     from pyathena import athena_read
     # 从你的科学计算文件中导入函数
-    from nt_electron_v2 import find_shocks_in_roi
+    from shock_v1 import find_shocks_in_roi_robust
 except ImportError as e:
     print(f"Fatal Error: Could not import a required module. {e}")
     print("Please check the paths to 'ipole-master/scripts' and 'pyathena'.")
@@ -386,86 +386,6 @@ def visualize_shock_xz_plane(roi_data, shock_properties, snapshot_name, shock_pl
 # --- 【新增】导入3D绘图工具 ---
 from mpl_toolkits.mplot3d import Axes3D
 # -----------------------------
-
-def visualize_shock_3d(roi_data, shock_properties, snapshot_name, shock_plot_filename, r_max_vis=100.0):
-    """
-    【3D激波构型版】
-    绘制指定半径范围内 (r < r_max_vis) 所有激波格点的三维散点图。
-    """
-    print(f"Generating 3D shock visualization (r < {r_max_vis} r_g)...")
-
-    shock_mask_roi = shock_properties['mask']
-    num_shocks_total = np.sum(shock_mask_roi)
-    print(f"Diagnostic: Found {num_shocks_total} total shock cells in the 3D ROI.")
-
-    if num_shocks_total == 0:
-        print("  No shocks found to visualize in 3D. Skipping.")
-        return
-
-    # --- 1. 提取所有三维激波点的坐标 ---
-    k_indices, j_indices, i_indices = np.where(shock_mask_roi)
-
-    # 获取网格中心点坐标数组
-    r_centers = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
-    theta_centers = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
-    phi_centers = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
-
-    # 映射索引到球坐标
-    r_shocks = r_centers[i_indices]
-    theta_shocks = theta_centers[j_indices]
-    phi_shocks = phi_centers[k_indices]
-
-    # --- 2. 【新增】根据半径过滤 ---
-    radius_filter = (r_shocks < r_max_vis)
-    if np.sum(radius_filter) == 0:
-        print(f"  No shocks found within r < {r_max_vis} r_g. Skipping 3D visualization.")
-        return
-        
-    r_shocks_filtered = r_shocks[radius_filter]
-    theta_shocks_filtered = theta_shocks[radius_filter]
-    phi_shocks_filtered = phi_shocks[radius_filter]
-    
-    print(f"  Visualizing {len(r_shocks_filtered)} shock cells within r < {r_max_vis} r_g.")
-
-    # --- 3. 将球坐标转换为笛卡尔坐标 ---
-    x_shocks = r_shocks_filtered * np.sin(theta_shocks_filtered) * np.cos(phi_shocks_filtered)
-    y_shocks = r_shocks_filtered * np.sin(theta_shocks_filtered) * np.sin(phi_shocks_filtered)
-    z_shocks = r_shocks_filtered * np.cos(theta_shocks_filtered) # Z 轴通常是喷流方向
-
-    # --- 4. 创建 3D 绘图 ---
-    fig = plt.figure(figsize=(12, 10))
-    ax = fig.add_subplot(111, projection='3d')
-
-    # 绘制 3D 散点图
-    # 可以根据需要调整点的大小 (s) 和透明度 (alpha)
-    scatter = ax.scatter(x_shocks, y_shocks, z_shocks, 
-                         marker='.', s=5, alpha=0.6, 
-                         c=z_shocks, cmap='viridis') # 可以用 Z 坐标或其他物理量给点上色
-
-    # --- 5. 美化图像 ---
-    ax.set_title(f"3D Shock Distribution (r < {r_max_vis} $r_g$) for {snapshot_name}")
-    ax.set_xlabel("X [$r_g$]")
-    ax.set_ylabel("Y [$r_g$]")
-    ax.set_zlabel("Z (Height) [$r_g$]")
-    
-    # 设置坐标轴范围以保持比例一致
-    max_range = r_max_vis * 1.05
-    ax.set_xlim(-max_range, max_range)
-    ax.set_ylim(-max_range, max_range)
-    ax.set_zlim(0, max_range) # Z轴只显示北半球
-
-    # 添加颜色条
-    fig.colorbar(scatter, ax=ax, label='Z Coordinate [$r_g$]')
-    
-    # 调整视角 (elevation, azimuth)
-    ax.view_init(elev=30., azim=-60)
-
-    plt.savefig(shock_plot_filename, dpi=150, bbox_inches='tight') # dpi可以适当降低以加快保存速度
-    print(f"3D visualization saved to {shock_plot_filename}")
-    plt.close(fig)
-
-# nt_electron_v2.py
-
 # --- (Ensure imports: import numpy as np) ---
 # --- 【New】Import Plotly ---
 import plotly.graph_objects as go
@@ -564,91 +484,6 @@ def visualize_shock_3d_interactive_html(roi_data, shock_properties, snapshot_nam
     # --- 6. 保存为 HTML (不变) ---
     fig.write_html(html_plot_filename)
     print(f"Interactive 3D visualization saved to {html_plot_filename}")
-
-def find_shocks_in_roi_classic(roi_data, gamma=4.0/3.0, mach_threshold=1.05, grad_p_filter_quantile=0.30):
-    """
-    【最终优化版 v2】
-    - 返回值中新增了激波位置的压力梯度大小 'grad_p_mag'，用于更精确的可视化诊断。
-    """
-    # ... (从函数开始到 candidate_indices = np.argwhere(candidate_mask) 的代码完全不变) ...
-    print("Starting Final Classic shock detection (Velocity-based screening, Pressure-based calculation)...")
-    press, rho = roi_data['press'], roi_data['rho']
-    nk, nj, ni = press.shape
-    vel1, vel2, vel3 = roi_data['vel1'], roi_data['vel2'], roi_data['vel3']
-    r_coords = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
-    theta_coords = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
-    phi_coords = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
-    phi_grid, theta_grid, r_grid = np.meshgrid(phi_coords, theta_coords, r_coords, indexing='ij')
-    print("  Step 1: Screening candidates with local normal Mach number...")
-    sound_speed = np.sqrt(gamma * press / rho)
-    mach_vec_r, mach_vec_theta, mach_vec_phi = vel1/(sound_speed+1e-30), vel2/(sound_speed+1e-30), vel3/(sound_speed+1e-30)
-    grad_P_phi_comp, grad_P_theta_comp, grad_P_r_comp = np.gradient(press, phi_coords, theta_coords, r_coords)
-    grad_P_r, grad_P_theta = grad_P_r_comp, (1.0 / r_grid) * grad_P_theta_comp
-    grad_P_phi = (1.0 / (r_grid * np.sin(theta_grid) + 1e-30)) * grad_P_phi_comp
-    grad_P_mag = np.sqrt(grad_P_r**2 + grad_P_theta**2 + grad_P_phi**2) + 1e-30
-    dot_product = mach_vec_r * grad_P_r + mach_vec_theta * grad_P_theta + mach_vec_phi * grad_P_phi
-    normal_mach = dot_product / grad_P_mag
-    candidate_mask = (normal_mach >= mach_threshold) & (dot_product > 0)
-    if grad_p_filter_quantile > 0 and np.any(grad_P_mag > 0):
-        grad_p_threshold = np.quantile(grad_P_mag[grad_P_mag > 0], grad_p_filter_quantile)
-        candidate_mask &= (grad_P_mag > grad_p_threshold)
-    candidate_indices = np.argwhere(candidate_mask)
-    print(f"  Found {len(candidate_indices)} candidate shock cells for verification.")
-
-    print("  Step 2: Verifying candidates and calculating properties...")
-    final_shock_mask = np.zeros_like(press, dtype=bool)
-    upstream_mach_grid = np.zeros_like(press)
-    downstream_temp_grid = np.zeros_like(press)
-    downstream_ne_grid = np.zeros_like(press)
-    # --- 【新增】: 初始化用于存储压力梯度大小的数组 ---
-    shock_grad_p_mag_grid = np.zeros_like(press)
-    
-    M_P, K_B = 1.6726e-24, 1.3806e-16
-
-    for k, j, i in candidate_indices:
-        # ... (验证逻辑不变) ...
-        if not (0 < k < nk-1 and 0 < j < nj-1 and 0 < i < ni-1): continue
-        P2, rho2, v2_vec = press[k,j,i], rho[k,j,i], np.array([vel1[k,j,i], vel2[k,j,i], vel3[k,j,i]])
-        min_pressure, upstream_neighbor = P2, None
-        for dk, dj, di in [(0,0,-1), (0,0,1), (0,-1,0), (0,1,0), (-1,0,0), (1,0,0)]:
-            if not (0 <= k+dk < nk and 0 <= j+dj < nj and 0 <= i+di < ni): continue
-            p_neighbor = press[k+dk, j+dj, i+di]
-            if p_neighbor < min_pressure:
-                min_pressure, upstream_neighbor = p_neighbor, (k+dk, j+dj, i+di)
-        if upstream_neighbor is None: continue
-        ku, ju, iu = upstream_neighbor
-        P1, rho1, v1_vec = press[ku,ju,iu], rho[ku,ju,iu], np.array([vel1[ku,ju,iu], vel2[ku,ju,iu], vel3[ku,ju,iu]])
-        n_vec = np.array([grad_P_r[k,j,i], grad_P_theta[k,j,i], grad_P_phi[k,j,i]]) / grad_P_mag[k,j,i]
-        a2, a1 = sound_speed[k,j,i], sound_speed[ku,ju,iu]
-        u2, u1 = np.dot(v2_vec, n_vec), np.dot(v1_vec, n_vec)
-        if u1 <= u2: continue
-        try:
-            pressure_ratio = P2 / P1
-            if pressure_ratio <= 1.0: continue
-            u_sh = u1 + a1 * np.sqrt(((gamma + 1)/(2*gamma))*pressure_ratio + (gamma - 1)/(2*gamma))
-            if (u1 + a1) < u_sh < (u2 + a2):
-                final_shock_mask[k,j,i] = True
-                mach_1_sq = 1.0 + (pressure_ratio - 1.0) * (gamma + 1.0) / (2.0 * gamma)
-                upstream_mach_grid[k,j,i] = np.sqrt(mach_1_sq)
-                mu = 0.5 
-                downstream_temp_grid[k,j,i] = (P2 * mu * M_P) / (rho2 * K_B)
-                downstream_ne_grid[k,j,i] = rho2 / M_P
-                # --- 【新增】: 记录该激波点的压力梯度大小 ---
-                shock_grad_p_mag_grid[k,j,i] = grad_P_mag[k,j,i]
-
-        except (ValueError, FloatingPointError):
-            continue
-
-    print(f"Final Classic detection finished. Verified {np.sum(final_shock_mask)} shock cells.")
-    
-    # --- 【新增】: 将压力梯度大小添加到返回的字典中 ---
-    return {
-        "mask": final_shock_mask,
-        "upstream_mach": upstream_mach_grid,
-        "downstream_temp": downstream_temp_grid,
-        "downstream_n_e": downstream_ne_grid,
-        "grad_p_mag": shock_grad_p_mag_grid # 新增的返回项
-    }
 
 
 def analyze_snapshot_full_pipeline(filename, config):
@@ -828,8 +663,8 @@ if __name__ == '__main__':
     
     config = {
         # --- 路径配置 ---
-        "data_directory": "/home/cyh_22307110238/project/Shockwave/data_test3/",
-        "output_directory": "/home/cyh_22307110238/project/Shockwave/workflow_output/",
+        "data_directory": "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/data_test3/",
+        "output_directory": "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/workflow_output/",
         "ipole_executable_path": "/home/cyh_22307110238/project/Shockwave/ipole-master/ipole",
         
         # --- 工作流控制 ---

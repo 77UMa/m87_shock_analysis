@@ -38,7 +38,8 @@ try:
     import ipole as ipole_api
     from pyathena import athena_read
     # 从你的科学计算文件中导入函数
-    from nt_electron_v2 import find_shocks_in_roi, calculate_nonthermal_electrons_full, visualize_shock_slice
+    from nt_electron_v1 import calculate_nonthermal_electrons
+    from shock_v1 import find_shocks_in_roi_robust
 except ImportError as e:
     print(f"Fatal Error: Could not import a required module. {e}")
     print("Please check the paths to 'ipole-master/scripts' and 'pyathena'.")
@@ -199,12 +200,11 @@ def analyze_snapshot_full_pipeline(args):
         gc.collect()
 
         print("  Step B: Finding shocks and visualization...")
-        shock_properties = find_shocks_in_roi(roi_data)
-        visualize_shock_slice(roi_data, shock_properties['mask'], os.path.basename(input_athdf_file), shock_plot_filename)
+        shock_properties = find_shocks_in_roi_robust(roi_data)
         
         print("  Step C: Calculating non-thermal electrons...")
         if np.any(shock_properties["mask"]):
-            nonthermal_props = calculate_nonthermal_electrons_full(shock_properties)
+            nonthermal_props = calculate_nonthermal_electrons(shock_properties)
         else:
             nonthermal_props = {
                 'q_grid': np.zeros_like(roi_data['press']),

@@ -2,13 +2,9 @@ import numpy as np
 import h5py
 import sys
 import os
-# 您需要在脚本开头增加这个导入，用于计算不完全贝塔函数
-from scipy.special import betainc
-# --- 在您的主脚本顶部，除了之前的导入，还需要导入 read_data ---
-from pyathena.read_data import read_data
-from pyathena.metric import kerr_schild
-import pdb
-from sklearn.cluster import DBSCAN
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
+from matplotlib.colors import LogNorm
 # --------------------------------------------------------------------------
 # 步骤 0: 将 pyathena 文件夹的路径添加到Python的搜索路径中
 # 假设您的 pyathena 文件夹与您的分析脚本在同一个父目录下
@@ -19,91 +15,163 @@ sys.path.insert(0, pyathena_dir)
 
 from pyathena import athena_read # 现在可以成功导入了
 # --------------------------------------------------------------------------
-def find_shocks_in_roi_classic(roi_data, gamma=4.0/3.0, mach_threshold=1.7, grad_p_filter_quantile=0.20):
+def find_shocks_in_roi_robust(roi_data, gamma=4.0/3.0, 
+                              mach_threshold_loose=1.05, 
+                              min_physical_mach=1.7,
+                              grad_p_filter_quantile=0.20, 
+                              march_cells=4):
     """
-    【最终优化版 v2】
-    - 返回值中新增了激波位置的压力梯度大小 'grad_p_mag'，用于更精确的可视化诊断。
+    【稳健版 v2.0 - 双重阈值与梯度回溯】
+    使用宽松的局地马赫数(mach_threshold_loose)进行初筛，以捕获被涂抹的激波。
+    然后通过梯度回溯(march_cells)采样真实的上下游状态。
+    最后，使用严格的物理马赫数(min_physical_mach)对回溯计算出的M1进行最终验证。
     """
-    # ... (从函数开始到 candidate_indices = np.argwhere(candidate_mask) 的代码完全不变) ...
-    print("Starting Final Classic shock detection (Velocity-based screening, Pressure-based calculation)...")
+    print(f"Starting ROBUST shock detection (Loose M_local >= {mach_threshold_loose}, Strict M_physical >= {min_physical_mach}, March={march_cells})...")
+    
+    # --- 步骤 1: 筛选候选点 (使用宽松阈值) ---
     press, rho = roi_data['press'], roi_data['rho']
     nk, nj, ni = press.shape
+    if nk == 0 or nj == 0 or ni == 0:
+        print("  Error: ROI data has zero dimension. Skipping.")
+        return { "mask": np.zeros_like(press, dtype=bool), "upstream_mach": np.zeros_like(press) }
+
     vel1, vel2, vel3 = roi_data['vel1'], roi_data['vel2'], roi_data['vel3']
     r_coords = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
     theta_coords = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
     phi_coords = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
+    
+    if r_coords.size == 0 or theta_coords.size == 0 or phi_coords.size == 0:
+         print("  Error: Coordinate arrays are empty. Skipping.")
+         return { "mask": np.zeros_like(press, dtype=bool), "upstream_mach": np.zeros_like(press) }
+
     phi_grid, theta_grid, r_grid = np.meshgrid(phi_coords, theta_coords, r_coords, indexing='ij')
+    
     print("  Step 1: Screening candidates with local normal Mach number...")
     sound_speed = np.sqrt(gamma * press / rho)
-    mach_vec_r, mach_vec_theta, mach_vec_phi = vel1/(sound_speed+1e-30), vel2/(sound_speed+1e-30), vel3/(sound_speed+1e-30)
+    mach_vec_r = vel1 / (sound_speed + 1e-30)
+    mach_vec_theta = vel2 / (sound_speed + 1e-30)
+    mach_vec_phi = vel3 / (sound_speed + 1e-30)
+    
     grad_P_phi_comp, grad_P_theta_comp, grad_P_r_comp = np.gradient(press, phi_coords, theta_coords, r_coords)
-    grad_P_r, grad_P_theta = grad_P_r_comp, (1.0 / r_grid) * grad_P_theta_comp
+    grad_P_r = grad_P_r_comp
+    grad_P_theta = (1.0 / (r_grid + 1e-30)) * grad_P_theta_comp
     grad_P_phi = (1.0 / (r_grid * np.sin(theta_grid) + 1e-30)) * grad_P_phi_comp
+    
     grad_P_mag = np.sqrt(grad_P_r**2 + grad_P_theta**2 + grad_P_phi**2) + 1e-30
     dot_product = mach_vec_r * grad_P_r + mach_vec_theta * grad_P_theta + mach_vec_phi * grad_P_phi
     normal_mach = dot_product / grad_P_mag
-    candidate_mask = (normal_mach >= mach_threshold) & (dot_product > 0)
+    
+    # 使用宽松的阈值来捕获所有可能的候选点
+    candidate_mask = (normal_mach >= mach_threshold_loose) & (dot_product > 0)
+    
     if grad_p_filter_quantile > 0 and np.any(grad_P_mag > 0):
         grad_p_threshold = np.quantile(grad_P_mag[grad_P_mag > 0], grad_p_filter_quantile)
         candidate_mask &= (grad_P_mag > grad_p_threshold)
+        
     candidate_indices = np.argwhere(candidate_mask)
     print(f"  Found {len(candidate_indices)} candidate shock cells for verification.")
 
-    print("  Step 2: Verifying candidates and calculating properties...")
+    # 步骤 1.5: 计算用于索引回溯的“逻辑”梯度
+    grad_P_k_raw, grad_P_j_raw, grad_P_i_raw = np.gradient(press)
+
+    # --- 步骤 2: 稳健验证 ---
+    print("  Step 2: Verifying candidates and calculating properties via marching...")
     final_shock_mask = np.zeros_like(press, dtype=bool)
     upstream_mach_grid = np.zeros_like(press)
     downstream_temp_grid = np.zeros_like(press)
     downstream_ne_grid = np.zeros_like(press)
-    # --- 【新增】: 初始化用于存储压力梯度大小的数组 ---
     shock_grad_p_mag_grid = np.zeros_like(press)
     
     M_P, K_B = 1.6726e-24, 1.3806e-16
 
     for k, j, i in candidate_indices:
-        # ... (验证逻辑不变) ...
-        if not (0 < k < nk-1 and 0 < j < nj-1 and 0 < i < ni-1): continue
-        P2, rho2, v2_vec = press[k,j,i], rho[k,j,i], np.array([vel1[k,j,i], vel2[k,j,i], vel3[k,j,i]])
-        min_pressure, upstream_neighbor = P2, None
-        for dk, dj, di in [(0,0,-1), (0,0,1), (0,-1,0), (0,1,0), (-1,0,0), (1,0,0)]:
-            if not (0 <= k+dk < nk and 0 <= j+dj < nj and 0 <= i+di < ni): continue
-            p_neighbor = press[k+dk, j+dj, i+di]
-            if p_neighbor < min_pressure:
-                min_pressure, upstream_neighbor = p_neighbor, (k+dk, j+dj, i+di)
-        if upstream_neighbor is None: continue
-        ku, ju, iu = upstream_neighbor
-        P1, rho1, v1_vec = press[ku,ju,iu], rho[ku,ju,iu], np.array([vel1[ku,ju,iu], vel2[ku,ju,iu], vel3[ku,ju,iu]])
-        n_vec = np.array([grad_P_r[k,j,i], grad_P_theta[k,j,i], grad_P_phi[k,j,i]]) / grad_P_mag[k,j,i]
-        a2, a1 = sound_speed[k,j,i], sound_speed[ku,ju,iu]
-        u2, u1 = np.dot(v2_vec, n_vec), np.dot(v1_vec, n_vec)
-        if u1 <= u2: continue
+        
+        # 2a. 确定法向向量 (在候选点)
+        n_vec_r = grad_P_r[k,j,i] / grad_P_mag[k,j,i]
+        n_vec_theta = grad_P_theta[k,j,i] / grad_P_mag[k,j,i]
+        n_vec_phi = grad_P_phi[k,j,i] / grad_P_mag[k,j,i]
+        n_vec = np.array([n_vec_r, n_vec_theta, n_vec_phi]) # (r, theta, phi) 物理法向
+
+        # 2b. 确定回溯的网格轴 (主导轴)
+        abs_G_k_raw = np.abs(grad_P_k_raw[k,j,i])
+        abs_G_j_raw = np.abs(grad_P_j_raw[k,j,i])
+        abs_G_i_raw = np.abs(grad_P_i_raw[k,j,i])
+
+        dominant_axis = np.argmax([abs_G_k_raw, abs_G_j_raw, abs_G_i_raw])
+        
+        dk_s, dj_s, di_s = 0, 0, 0
+        if dominant_axis == 0:
+            dk_s = -int(np.sign(grad_P_k_raw[k,j,i]))
+        elif dominant_axis == 1:
+            dj_s = -int(np.sign(grad_P_j_raw[k,j,i]))
+        else:
+            di_s = -int(np.sign(grad_P_i_raw[k,j,i]))
+            
+        if dk_s == 0 and dj_s == 0 and di_s == 0:
+            continue 
+
+        # 2c. 采样上游 (State 1) 和下游 (State 2)
+        ku = np.clip(k + dk_s * march_cells, 0, nk-1)
+        ju = np.clip(j + dj_s * march_cells, 0, nj-1)
+        iu = np.clip(i + di_s * march_cells, 0, ni-1)
+        
+        kd = np.clip(k - dk_s * march_cells, 0, nk-1)
+        jd = np.clip(j - dj_s * march_cells, 0, nj-1)
+        id = np.clip(i - di_s * march_cells, 0, ni-1)
+
+        # 2d. 提取稳健的物理状态
+        P1, rho1 = press[ku,ju,iu], rho[ku,ju,iu]
+        v1_vec = np.array([vel1[ku,ju,iu], vel2[ku,ju,iu], vel3[ku,ju,iu]])
+        a1 = sound_speed[ku,ju,iu]
+
+        P2, rho2 = press[kd,jd,id], rho[kd,jd,id]
+        v2_vec = np.array([vel1[kd,jd,id], vel2[kd,jd,id], vel3[kd,jd,id]])
+        a2 = sound_speed[kd,jd,id]
+
+        # 2e. Rankine-Hugoniot 验证
+        u1 = np.dot(v1_vec, n_vec)
+        u2 = np.dot(v2_vec, n_vec)
+        
+        if u1 <= u2: continue 
+
         try:
             pressure_ratio = P2 / P1
-            if pressure_ratio <= 1.0: continue
+            if pressure_ratio <= 1.0: continue 
+            
             u_sh = u1 + a1 * np.sqrt(((gamma + 1)/(2*gamma))*pressure_ratio + (gamma - 1)/(2*gamma))
+            
             if (u1 + a1) < u_sh < (u2 + a2):
-                final_shock_mask[k,j,i] = True
+                
+                # 计算物理马赫数 M1
                 mach_1_sq = 1.0 + (pressure_ratio - 1.0) * (gamma + 1.0) / (2.0 * gamma)
-                upstream_mach_grid[k,j,i] = np.sqrt(mach_1_sq)
+                current_physical_mach = np.sqrt(mach_1_sq)
+
+                # --- 【新增的严格验证】 ---
+                # 只有当计算出的物理马赫数也大于我们的严格阈值时，才接受它
+                if current_physical_mach < min_physical_mach:
+                    continue
+                # --- 【验证结束】 ---
+                
+                final_shock_mask[k,j,i] = True 
+                upstream_mach_grid[k,j,i] = current_physical_mach
+                
                 mu = 0.5 
                 downstream_temp_grid[k,j,i] = (P2 * mu * M_P) / (rho2 * K_B)
                 downstream_ne_grid[k,j,i] = rho2 / M_P
-                # --- 【新增】: 记录该激波点的压力梯度大小 ---
                 shock_grad_p_mag_grid[k,j,i] = grad_P_mag[k,j,i]
 
         except (ValueError, FloatingPointError):
-            continue
+            continue 
 
-    print(f"Final Classic detection finished. Verified {np.sum(final_shock_mask)} shock cells.")
+    print(f"Final Robust detection finished. Verified {np.sum(final_shock_mask)} shock cells.")
     
-    # --- 【新增】: 将压力梯度大小添加到返回的字典中 ---
     return {
         "mask": final_shock_mask,
         "upstream_mach": upstream_mach_grid,
         "downstream_temp": downstream_temp_grid,
         "downstream_n_e": downstream_ne_grid,
-        "grad_p_mag": shock_grad_p_mag_grid # 新增的返回项
+        "grad_p_mag": shock_grad_p_mag_grid
     }
-
 
 import matplotlib.pyplot as plt
 import numpy as np
