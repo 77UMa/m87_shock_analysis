@@ -177,7 +177,10 @@ def analyze_snapshot_full_pipeline(filename, config):
 
     # --- 阶段五：可视化 (激波 + 新增的诊断图) ---
     print("  Step D: Generating visualizations...")
-    
+    # ==============================================================================
+    # 激波部分
+    # ==============================================================================  
+      
     # a. 激波：单phi切片侧视图 (R-Z平面)
     # overview_plot_filename = os.path.join(dir_shock_plots, f"{base_name}_shock_overview_slice.png")
     # visualize_shock_overview(roi_data, shock_properties, base_name, overview_plot_filename, config)
@@ -193,6 +196,10 @@ def analyze_snapshot_full_pipeline(filename, config):
     # d. 激波：3D交互式HTML
     vis_3d_filename_html = os.path.join(dir_shock_plots, f"{base_name}_shock_3d_interactive.html")
     visualize_shock_3d_interactive_html(roi_data, shock_properties, base_name, vis_3d_filename_html)
+
+    # ==============================================================================
+    # 非热电子部分
+    # ==============================================================================  
 
     # e. 【新增】非热电子：1D 统计直方图
     diag_hist_filename = os.path.join(dir_diag_plots, f"{base_name}_nt_diag_hist.png")
