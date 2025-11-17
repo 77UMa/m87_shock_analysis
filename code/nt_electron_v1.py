@@ -9,7 +9,7 @@ import pdb
 
 def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, xi_max=0.05):
     """
-    严格按照 Xia et al. (2010) 附录A 的公式计算非热电子能谱参数。
+    严格按照 Xia et al. (2025) 附录A 的公式计算非热电子能谱参数。
     注入效率不再是固定值，而是由激波物理动态决定。
     
     Args:

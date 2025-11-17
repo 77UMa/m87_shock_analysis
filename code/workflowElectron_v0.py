@@ -169,9 +169,9 @@ def analyze_snapshot_full_pipeline(filename, config):
         nonthermal_props = calculate_nonthermal_electrons(shock_properties, **config["nt_params"])
     else:
         nonthermal_props = {
-            'q_grid': np.zeros_like(roi_data['press']),
-            'C_grid': np.zeros_like(roi_data['press']),
-            'mask': np.zeros_like(roi_data['press'], dtype=bool)
+            'q_grid': np.zeros_like(roi_data['rho']),
+            'C_grid': np.zeros_like(roi_data['rho']),
+            'mask': np.zeros_like(roi_data['rho'], dtype=bool)
         }
         print("  No shocks found, non-thermal properties initialized to zero.")
 
@@ -248,7 +248,7 @@ if __name__ == '__main__':
             "mach_threshold_loose": 1.05, # [新] 宽松的初筛阈值
             "min_physical_mach": 1.7,  # [新] 严格的物理验证阈值
             "grad_p_filter_quantile": 0.20,
-            "march_cells": 5            # [新] 回溯距离
+            "march_cells": 6            # [新] 回溯距离
         },
 
         # --- 【新增】非热电子参数 ---
