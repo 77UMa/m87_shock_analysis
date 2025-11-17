@@ -574,7 +574,7 @@ def analyze_snapshot_full_pipeline(filename, config):
     # 2. 执行激波探测和后续分析 (与您之前的代码相同)
     print("  Step B: Finding shocks and visualization...")
    
-    shock_properties = find_shocks_in_roi_classic(roi_data) 
+    shock_properties = find_shocks_in_roi_robust(roi_data) 
 
     # a. 调用“单phi切片侧视图” (R-Z平面，仅右半)
     overview_plot_filename = os.path.join(dir_shock_plots, f"{base_name}_shock_overview_slice.png")

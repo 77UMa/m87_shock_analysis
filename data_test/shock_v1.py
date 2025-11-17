@@ -180,119 +180,107 @@ import plotly.graph_objects as go
 import pandas as pd # Optional, but often convenient
 
 def visualize_shock_3d_interactive_html(roi_data, shock_properties, snapshot_name, html_plot_filename,
-                                        x_lim=260.0, y_lim=260.0, z_lim=1200.0): # 新增范围参数
-    """
-    【Interactive HTML 3D版 v2】
-    - 绘制指定半径范围内 (r < r_max_vis) 所有激波格点的3D散点图。
-    - 【新增】散点颜色根据上游马赫数 (upstream_mach) 变化。
-    - 保存为可交互旋转的 HTML 文件。
-
-    【Interactive HTML 3D版 v3】
-    - 绘制指定笛卡尔坐标范围内的激波3D散点图。
-    - 散点颜色根据上游马赫数变化。
-    - 保存为可交互旋转的 HTML 文件。
-    """
+                                        x_lim=260.0, y_lim=260.0, z_lim=1200.0):
+    """【Interactive HTML 3D版 v3】"""
     print(f"Generating INTERACTIVE 3D shock visualization (X,Y < {x_lim}, Z < {z_lim} r_g)...")
-
+    # ... (代码来自 shock_v1.py / workflowShock_processpool.py) ...
     shock_mask_roi = shock_properties['mask']
     upstream_mach_roi = shock_properties['upstream_mach']
-    
     num_shocks_total = np.sum(shock_mask_roi)
-    print(f"Diagnostic: Found {num_shocks_total} total shock cells in the 3D ROI.")
-
     if num_shocks_total == 0:
         print("  No shocks found to visualize in 3D. Skipping.")
         return
-
-    # --- 1. 提取所有三维激波点的坐标和马赫数 ---
     k_indices, j_indices, i_indices = np.where(shock_mask_roi)
     r_centers = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
     theta_centers = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
     phi_centers = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
-    
     r_shocks = r_centers[i_indices]
     theta_shocks = theta_centers[j_indices]
     phi_shocks = phi_centers[k_indices]
     mach_shocks = upstream_mach_roi[k_indices, j_indices, i_indices]
-
-    # --- 2. 将所有激波点转换为笛卡尔坐标 ---
     x_shocks_all = r_shocks * np.sin(theta_shocks) * np.cos(phi_shocks)
     y_shocks_all = r_shocks * np.sin(theta_shocks) * np.sin(phi_shocks)
     z_shocks_all = r_shocks * np.cos(theta_shocks)
-
-    # --- 3. 【核心修改】根据笛卡尔坐标范围进行过滤 ---
     coord_filter = (np.abs(x_shocks_all) < x_lim) & \
                    (np.abs(y_shocks_all) < y_lim) & \
                    (z_shocks_all < z_lim) & \
-                   (z_shocks_all >= 0) # 仅保留北半球 Z>=0
-
+                   (z_shocks_all >= 0)
     if np.sum(coord_filter) == 0:
         print(f"  No shocks found within the specified X, Y, Z limits. Skipping 3D visualization.")
         return
-        
     x_shocks_filtered = x_shocks_all[coord_filter]
     y_shocks_filtered = y_shocks_all[coord_filter]
     z_shocks_filtered = z_shocks_all[coord_filter]
     mach_shocks_filtered = mach_shocks[coord_filter]
-    
     print(f"  Visualizing {len(x_shocks_filtered)} shock cells within the specified limits.")
-
-    # --- 4. 创建 Plotly 3D 散点图 (不变) ---
     fig = go.Figure(data=[go.Scatter3d(
-        x=x_shocks_filtered,
-        y=y_shocks_filtered,
-        z=z_shocks_filtered,
+        x=x_shocks_filtered, y=y_shocks_filtered, z=z_shocks_filtered,
         mode='markers',
         marker=dict(
-            size=2,
-            color=mach_shocks_filtered,
-            colorscale='Plasma',
-            opacity=0.7,
-            colorbar=dict(title='Upstream Mach ($M_1$)'),
-            cmin=1.0,
-            cmax=2.0
+            size=2, color=mach_shocks_filtered, colorscale='Plasma',
+            opacity=0.7, colorbar=dict(title='Upstream Mach ($M_1$)'),
+            cmin=1.0, cmax=max(2.0, np.quantile(mach_shocks_filtered, 0.95)) # 自动调整色阶上限
         )
     )])
-
-    # --- 5. 【核心修改】配置布局以匹配新的范围 ---
     fig.update_layout(
         title=f"Interactive 3D Shock Distribution (X,Y<±{x_lim}, Z<{z_lim}) for {snapshot_name}",
         scene=dict(
-            xaxis_title='X [$r_g$]',
-            yaxis_title='Y [$r_g$]',
-            zaxis_title='Z (Height) [$r_g$]',
-            aspectmode='data', # 使用 'data' 让 Z 轴可以拉伸
+            xaxis_title='X [$r_g$]', yaxis_title='Y [$r_g$]', zaxis_title='Z (Height) [$r_g$]',
+            aspectmode='data',
             xaxis=dict(range=[-x_lim, x_lim], backgroundcolor="rgb(50, 50, 50)"),
             yaxis=dict(range=[-y_lim, y_lim], backgroundcolor="rgb(50, 50, 50)"),
-            zaxis=dict(range=[0, z_lim], backgroundcolor="rgb(50, 50, 50)") # Z 从 0 开始
+            zaxis=dict(range=[0, z_lim], backgroundcolor="rgb(50, 50, 50)")
         ),
         margin=dict(l=0, r=0, b=0, t=40)
     )
-
-    # --- 6. 保存为 HTML (不变) ---
     fig.write_html(html_plot_filename)
     print(f"Interactive 3D visualization saved to {html_plot_filename}")
-
+    
+def visualize_shock_overview(roi_data, shock_properties, snapshot_name, shock_plot_filename, config):
+    """【全局概览版】"""
+    print("Generating shock overview visualization...")
+    # ... (代码来自 workflowShock_processpool.py) ...
+    shock_mask_roi = shock_properties['mask']
+    k_slice_index = shock_mask_roi.shape[0] // 2
+    pressure_slice = roi_data['press'][k_slice_index, :, :]
+    shock_mask_slice = shock_mask_roi[k_slice_index, :, :]
+    num_shocks_in_slice = np.sum(shock_mask_slice)
+    print(f"Diagnostic: Found {num_shocks_in_slice} shock cells on this 2D slice.")
+    r_faces, theta_faces = roi_data['x1f'], roi_data['x2f']
+    r_centers = (r_faces[:-1] + r_faces[1:]) / 2.0
+    theta_centers = (theta_faces[:-1] + theta_faces[1:]) / 2.0
+    r_grid_centers, theta_grid_centers = np.meshgrid(r_centers, theta_centers, indexing='xy')
+    R_cyl_centers = r_grid_centers * np.sin(theta_grid_centers)
+    Z_cyl_centers = r_grid_centers * np.cos(theta_grid_centers)
+    fig, ax = plt.subplots(figsize=(10, 10))
+    pressure_slice_log = np.log10(pressure_slice + 1e-30)
+    vmin_fixed, vmax_fixed = config['v_min'], config['v_max'] 
+    im = ax.pcolormesh(R_cyl_centers, Z_cyl_centers, pressure_slice_log, 
+                       cmap='magma', shading='auto', vmin=vmin_fixed, vmax=vmax_fixed)
+    fig.colorbar(im, ax=ax, label='log10(Pressure)', extend='both')
+    if num_shocks_in_slice > 0:
+        shock_overlay = np.zeros((pressure_slice.shape[0], pressure_slice.shape[1], 4))
+        shock_overlay[shock_mask_slice] = [0.2, 1.0, 0.2, 0.7] # 亮绿色
+        ax.imshow(shock_overlay, origin='lower', 
+                  extent=[R_cyl_centers.min(), R_cyl_centers.max(), Z_cyl_centers.min(), Z_cyl_centers.max()],
+                  aspect='auto', interpolation='none')
+    ax.set_title(f"Shock Fronts in {snapshot_name}")
+    ax.set_xlabel("R (Cylindrical Radius) [$r_g$]")
+    ax.set_ylabel("Z (Height) [$r_g$]")
+    ax.set_aspect('equal', 'box')
+    plt.savefig(shock_plot_filename, dpi=200, bbox_inches='tight')
+    print(f"Overview visualization saved to {shock_plot_filename}")
+    plt.close(fig)
 
 def visualize_shock_projection_dual_range(roi_data, shock_properties, snapshot_name, shock_plot_filename):
-    """
-    【俯视图版 - 双范围】可视化函数。
-    将激波投影分为两个面板显示：
-    - 左面板: 内区 (r < 50 rg)，高分辨率，色阶 [0, 30]。
-    - 右面板: 外区 (r >= 50 rg)，低分辨率，色阶 [0, 15]。
-    均使用线性均匀分箱。
-    """
+    """【俯视图版 - 双范围】"""
     print("Generating dual-range shock projection (top-down view)...")
-
+    # ... (代码来自 shock_v1.py / workflowShock_processpool.py) ...
     shock_mask_roi = shock_properties['mask']
     num_shocks_total = np.sum(shock_mask_roi)
-    print(f"Diagnostic: Found {num_shocks_total} total shock cells in the 3D ROI.")
-
     if num_shocks_total == 0:
         print("  No shocks found to project. Skipping visualization.")
         return
-
-    # --- 1. 提取并转换坐标 (不变) ---
     k_indices, j_indices, i_indices = np.where(shock_mask_roi)
     r_centers = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
     theta_centers = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
@@ -302,75 +290,38 @@ def visualize_shock_projection_dual_range(roi_data, shock_properties, snapshot_n
     phi_shocks = phi_centers[k_indices]
     x_shocks = r_shocks * np.sin(theta_shocks) * np.cos(phi_shocks)
     y_shocks = r_shocks * np.sin(theta_shocks) * np.sin(phi_shocks)
-
-    # --- 2. 准备绘图 (两个子图) ---
-    fig, (ax_inner, ax_outer) = plt.subplots(1, 2, figsize=(18, 9)) # 1行2列
+    fig, (ax_inner, ax_outer) = plt.subplots(1, 2, figsize=(18, 9))
     fig.suptitle(f"Shock Density Projection (Top-Down View) for {snapshot_name}", fontsize=16)
-
     cmap = 'inferno'
-
-    # --- 3. 绘制左面板 (内区: r < 50 rg) ---
     inner_mask = (r_shocks < 50)
-    x_shocks_inner = x_shocks[inner_mask]
-    y_shocks_inner = y_shocks[inner_mask]
-
-    plot_range_inner = 100
-    bins_inner = 256
+    x_shocks_inner, y_shocks_inner = x_shocks[inner_mask], y_shocks[inner_mask]
+    plot_range_inner, bins_inner = 100, 256
     vmin_inner, vmax_inner = 1, 50
     norm_in = LogNorm(vmin=vmin_inner, vmax=vmax_inner)
-
     if len(x_shocks_inner) > 0:
-        h_inner = ax_inner.hist2d(x_shocks_inner, y_shocks_inner, 
-                                  bins=bins_inner, 
+        h_inner = ax_inner.hist2d(x_shocks_inner, y_shocks_inner, bins=bins_inner, 
                                   range=[[-plot_range_inner, plot_range_inner], [-plot_range_inner, plot_range_inner]],
-                                  cmap=cmap,
-                                  cmin=1,
-                                  norm=norm_in)
+                                  cmap=cmap, cmin=1, norm=norm_in)
         fig.colorbar(h_inner[3], ax=ax_inner, label='Shock Cells per Bin (Inner)', extend='max')
-    else:
-        ax_inner.text(0.5, 0.5, 'No shocks in inner region', ha='center', va='center', transform=ax_inner.transAxes)
-
     ax_inner.set_title(f"Inner Region (r < 50 $r_g$)")
-    ax_inner.set_xlabel("X [$r_g$]")
-    ax_inner.set_ylabel("Y [$r_g$]")
-    ax_inner.set_facecolor('black')
-    ax_inner.set_aspect('equal', 'box')
-    ax_inner.set_xlim(-plot_range_inner, plot_range_inner)
-    ax_inner.set_ylim(-plot_range_inner, plot_range_inner)
-
-    # --- 4. 绘制右面板 (外区: r >= 50 rg) ---
+    ax_inner.set_xlabel("X [$r_g$]"); ax_inner.set_ylabel("Y [$r_g$]")
+    ax_inner.set_facecolor('black'); ax_inner.set_aspect('equal', 'box')
+    ax_inner.set_xlim(-plot_range_inner, plot_range_inner); ax_inner.set_ylim(-plot_range_inner, plot_range_inner)
     outer_mask = (r_shocks >= 50)
-    x_shocks_outer = x_shocks[outer_mask]
-    y_shocks_outer = y_shocks[outer_mask]
-
-    plot_range_outer = 800
-    bins_outer = 128
+    x_shocks_outer, y_shocks_outer = x_shocks[outer_mask], y_shocks[outer_mask]
+    plot_range_outer, bins_outer = 800, 128
     vmin_outer, vmax_outer = 1, 10
-
-    norm = LogNorm(vmin=vmin_outer, vmax=vmax_outer)
-
+    norm_out = LogNorm(vmin=vmin_outer, vmax=vmax_outer)
     if len(x_shocks_outer) > 0:
-        h_outer = ax_outer.hist2d(x_shocks_outer, y_shocks_outer, 
-                                  bins=bins_outer, 
+        h_outer = ax_outer.hist2d(x_shocks_outer, y_shocks_outer, bins=bins_outer, 
                                   range=[[-plot_range_outer, plot_range_outer], [-plot_range_outer, plot_range_outer]],
-                                  cmap=cmap,
-                                  cmin=1,
-                                  norm = norm)
+                                  cmap=cmap, cmin=1, norm=norm_out)
         fig.colorbar(h_outer[3], ax=ax_outer, label='Shock Cells per Bin Outer (log)', extend='max')
-    else:
-         ax_outer.text(0.5, 0.5, 'No shocks in outer region', ha='center', va='center', transform=ax_outer.transAxes)
-
     ax_outer.set_title(f"Outer Region (r >= 50 $r_g$)")
-    ax_outer.set_xlabel("X [$r_g$]")
-    ax_outer.set_ylabel("Y [$r_g$]") # Keep label for clarity, though ticks might be removed later if needed
-    ax_outer.set_facecolor('black')
-    ax_outer.set_aspect('equal', 'box')
-    ax_outer.set_xlim(-plot_range_outer, plot_range_outer)
-    ax_outer.set_ylim(-plot_range_outer, plot_range_outer)
-
-    # --- 5. 最终调整 ---
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to prevent title overlap
-
+    ax_outer.set_xlabel("X [$r_g$]"); ax_outer.set_ylabel("Y [$r_g$]")
+    ax_outer.set_facecolor('black'); ax_outer.set_aspect('equal', 'box')
+    ax_outer.set_xlim(-plot_range_outer, plot_range_outer); ax_outer.set_ylim(-plot_range_outer, plot_range_outer)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(shock_plot_filename, dpi=200, bbox_inches='tight')
     print(f"Dual-range projection visualization saved to {shock_plot_filename}")
     plt.close(fig)
