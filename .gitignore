@@ -12,10 +12,10 @@
 *.par
 *.txt
 *.sh
-*.c
-*.h
+
 *.o
 *.make
+
 
 # Python cache and environment files
 __pycache__/
