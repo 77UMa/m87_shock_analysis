@@ -31,7 +31,7 @@ analysis_checkpoints/
 shock_visuals*/
 workflow_output*/
 sliced_data_checkpoints/
-ipole*/
+ipole-master*/
 pyathena*/
 old/
 # Specific large files
