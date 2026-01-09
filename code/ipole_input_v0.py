@@ -67,6 +67,7 @@ def create_ipole_input_h5(ipole_h5_filename, roi_data, shock_properties, nonther
         prims_final = prims_stack.transpose(2, 1, 0, 3) # (nx, ny, nz, nvar)
         f.create_dataset('prims', data=prims_final, dtype='float32')
 
+
         # --- 注入非热电子物理 ---
         q_grid = nonthermal_props['q_grid']
         kel_grid = np.where(shock_properties['mask'], 1, 0) # 1=非热, 0=热
@@ -77,8 +78,10 @@ def create_ipole_input_h5(ipole_h5_filename, roi_data, shock_properties, nonther
         p_grid[~shock_properties['mask']] = 0.0 # 在非激波区设为0
         
         # 确保维度正确 (nx, ny, nz)
-        f.create_dataset('KEL', data=kel_grid.transpose(2, 1, 0), dtype='int32')
-        f.create_dataset('p', data=p_grid.transpose(2, 1, 0), dtype='float32')
+        # 建议将最后三行稍微修改为：
+        f.create_dataset('KEL', data=np.ascontiguousarray(kel_grid.transpose(2, 1, 0)), dtype='float64')
+        f.create_dataset('UNTH', data=np.ascontiguousarray(nonthermal_props['C_grid'].transpose(2, 1, 0)), dtype='float64')
+        f.create_dataset('p', data=np.ascontiguousarray(p_grid.transpose(2, 1, 0)), dtype='float64')
 
     print(f"  Successfully created IPOLE input file.")
 

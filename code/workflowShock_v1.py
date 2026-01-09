@@ -48,9 +48,7 @@ try:
     from pyathena import athena_read
     import ipole as ipole_api
     # 从你的科学计算文件中导入函数
-    from shock_v1 import find_shocks_in_roi_robust,  visualize_shock_projection_dual_range, visualize_shock_3d_interactive_html
-    from nt_electron_v1 import calculate_nonthermal_electrons, plot_diagnostic_histograms, plot_diagnostic_correlations
-    from ipole_input_v0 import create_ipole_input_h5, plot_ipole_output
+    from shock_v1 import find_shocks_in_roi_mhd,  visualize_shock_projection_dual_range, visualize_shock_3d_interactive_html
 
 except ImportError as e:
     print(f"Fatal Error: Could not import a required module. {e}")
@@ -84,18 +82,9 @@ def analyze_snapshot_full_pipeline(filename, config):
     os.makedirs(dir_analysis_checkpoints, exist_ok=True)
     analysis_checkpoint_filename = os.path.join(dir_analysis_checkpoints, f"{base_name}_analysis.npz")
     
-    dir_shock_plots = os.path.join(config['output_directory'], 'shock_visuals')
+    dir_shock_plots = os.path.join(config['output_directory'], 'MHDshock_visuals')
     os.makedirs(dir_shock_plots, exist_ok=True)
-    
-    dir_diag_plots = os.path.join(config['output_directory'], 'diagnostic_plots')
-    os.makedirs(dir_diag_plots, exist_ok=True)
-    
-    dir_ipole_inputs = os.path.join(config['output_directory'], 'ipole_inputs') 
-    dir_ipole_outputs = os.path.join(config['output_directory'], 'ipole_outputs')
-    dir_final_images = os.path.join(config['output_directory'], 'final_images')
-    os.makedirs(dir_ipole_inputs, exist_ok=True)
-    os.makedirs(dir_ipole_outputs, exist_ok=True)
-    os.makedirs(dir_final_images, exist_ok=True)
+
 
     # --- 阶段一：数据加载/重建 ---
     full_data = None
@@ -176,81 +165,14 @@ def analyze_snapshot_full_pipeline(filename, config):
 
     # --- 阶段三：激波探测 ---
     print("  Step B: Finding shocks...")
-    shock_properties = find_shocks_in_roi_robust(roi_data, **config["shock_params"]) 
-    
-    # --- 阶段四：非热电子计算 ---
-    print("  Step C: Calculating non-thermal electrons...")
-    if np.any(shock_properties["mask"]):
-        nonthermal_props = calculate_nonthermal_electrons(shock_properties, **config["nt_params"])
-    else:
-        nonthermal_props = {
-            'q_grid': np.zeros_like(roi_data['press']),
-            'C_grid': np.zeros_like(roi_data['press']),
-            'mask': np.zeros_like(roi_data['press'], dtype=bool)
-        }
-        print("  No shocks found, non-thermal properties initialized to zero.")
+    shock_properties = find_shocks_in_roi_mhd(roi_data, **config["shock_params"]) 
 
     # --- 阶段五：诊断与可视化 (激波 + 诊断图) ---
     print("  Step D: Generating diagnostic visualizations...")
-    
-    # overview_plot_filename = os.path.join(dir_shock_plots, f"{base_name}_shock_overview_slice.png")
-    # visualize_shock_overview(roi_data, shock_properties, base_name, overview_plot_filename, config)
-
-    projection_plot_filename = os.path.join(dir_shock_plots, f"{base_name}_shock_projection_dual.png")
-    visualize_shock_projection_dual_range(roi_data, shock_properties, base_name, projection_plot_filename)
-
-    # xz_plane_plot_filename = os.path.join(dir_shock_plots, f"{base_name}_shock_plane_xz.png")
-    # visualize_shock_xz_plane(roi_data, shock_properties, base_name, xz_plane_plot_filename, config)
 
     vis_3d_filename_html = os.path.join(dir_shock_plots, f"{base_name}_shock_3d_interactive.html")
     visualize_shock_3d_interactive_html(roi_data, shock_properties, base_name, vis_3d_filename_html)
-
-    diag_hist_filename = os.path.join(dir_diag_plots, f"{base_name}_nt_diag_hist.png")
-    plot_diagnostic_histograms(shock_properties, nonthermal_props, base_name, diag_hist_filename)
-    
-    diag_corr_filename = os.path.join(dir_diag_plots, f"{base_name}_nt_diag_corr.png")
-    plot_diagnostic_correlations(shock_properties, nonthermal_props, base_name, diag_corr_filename)
-    
-    # --- 阶段六：IPOLE 运行 ---
-    
-    ipole_input_h5 = os.path.join(dir_ipole_inputs, f"{base_name}_ipole_input.h5")
-    ipole_output_h5 = os.path.join(dir_ipole_outputs, f"{base_name}_ipole_image.h5")
-    final_png_name = os.path.join(dir_final_images, f"{base_name}_final_image.png")
-    
-    create_ipole_input_h5(ipole_input_h5, roi_data, shock_properties, nonthermal_props, spin=config['spin'])
-    return
-    print(f"--- Step F: Running IPOLE via ipole.py API... ---")
-    
-    ipole_args = {key: config['ipole_params'][key] for key in ['thetacam', 'freqcgs', 'M_unit', 'trat_j', 'trat_d', 'sigma_cut', 'fov']}
-    ipole_args['dump'] = ipole_input_h5
-    ipole_args['outfile'] = ipole_output_h5
-    
-    try:
-        start_ipole_time = time.time()
-        ipole_api.run(ipole_args, exe=config['ipole_executable_path'], verbose=1)
-        end_ipole_time = time.time()
-        
-        print(f"  IPOLE execution time: {end_ipole_time - start_ipole_time:.2f} seconds.")
-            
-        if os.path.exists(ipole_output_h5):
-            plot_ipole_output(ipole_output_h5, fov_muas=config['ipole_params']['fov'], output_png_filename=final_png_name)
-        else:
-            print(f"  Error: IPOLE did not produce the expected output file.")
-
-    except Exception as e:
-        print(f"\n  !!! IPOLE EXECUTION FAILED: {e} !!!\n")
-        import traceback
-        traceback.print_exc()
-        
-    finally:
-        if config['auto_cleanup'] and os.path.exists(ipole_input_h5):
-            print(f"--- Cleaning up intermediate file: {os.path.basename(ipole_input_h5)} ---")
-            os.remove(ipole_input_h5)
-            print("  Cleanup complete.")
-
-    print(f"--- Analysis complete for {base_name}. ---")
-    print("==============================================================================\n")
-    return
+ 
 
 
 # ==============================================================================
@@ -267,8 +189,7 @@ if __name__ == '__main__':
     config = {
         # --- 路径配置 ---
         "data_directory": os.path.join(CPFS_ROOT_PATH, "data_test3/"), 
-        "output_directory": os.path.join(CPFS_ROOT_PATH, "workflow_output_DSA_run_02/"), # 建议为新运行设置新输出目录
-        "ipole_executable_path": os.path.join(HOME_PATH, "ipole-DSA/ipole"),
+        "output_directory": os.path.join(CPFS_ROOT_PATH, "MHDshock/"), # 建议为新运行设置新输出目录
         
         # --- 工作流控制 ---
         "save_full_data_checkpoint": False,

@@ -173,6 +173,134 @@ def find_shocks_in_roi_robust(roi_data, gamma=4.0/3.0,
         "grad_p_mag": shock_grad_p_mag_grid
     }
 
+def find_shocks_in_roi_mhd(roi_data, gamma=4.0/3.0, 
+                           mach_threshold_loose=1.05, 
+                           min_physical_mach=1.7,
+                           grad_p_filter_quantile=0.10, 
+                           march_cells=5):
+    """
+    【3D MHD 稳健版激波探测器】
+    针对 M87 GRMHD (球面坐标) 优化：
+    1. 使用总压 P_tot = P_gas + 0.5*B^2 进行梯度计算 [cite: 7836, 8412]。
+    2. 使用快磁声速 v_fast 作为特征速度 [cite: 7836, 8417]。
+    3. 支持球面坐标系下的梯度修正 (r, theta, phi) 。
+    """
+    print(f"Starting 3D MHD shock detection (Loose M_local >= {mach_threshold_loose}, Strict M_physical >= {min_physical_mach})...")
+    
+    # --- 1. 数据准备 ---
+    press = roi_data['press']
+    rho = roi_data['rho']
+    vel1, vel2, vel3 = roi_data['vel1'], roi_data['vel2'], roi_data['vel3']
+    b1, b2, b3 = roi_data['Bcc1'], roi_data['Bcc2'], roi_data['Bcc3']
+    
+    nk, nj, ni = press.shape
+    
+    # 坐标准备 (用于梯度修正)
+    r_coords = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
+    theta_coords = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
+    phi_coords = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
+    phi_grid, theta_grid, r_grid = np.meshgrid(phi_coords, theta_coords, r_coords, indexing='ij')
+
+    # --- 2. 计算 MHD 核心物理量 ---
+    # a. 计算磁压与总压 [cite: 7836, 8412]
+    b_sq = b1**2 + b2**2 + b3**2
+    p_mag = 0.5 * b_sq
+    p_tot = press + p_mag
+    
+    # b. 计算快磁声速 v_fast [cite: 7836, 8414, 8417]
+    cs_sq = gamma * press / rho
+    va_sq = b_sq / rho
+    v_fast = np.sqrt(cs_sq + va_sq) # 采用垂直近似以获得最大鲁棒性
+
+    # --- 3. 计算 3D 梯度 (球面坐标系修正) ---
+    # np.gradient 返回顺序对应 (dim0, dim1, dim2) -> (phi, theta, r)
+    grad_P_phi_raw, grad_P_theta_raw, grad_P_r_raw = np.gradient(p_tot)
+    
+    # 物理距离缩放 
+    dr = np.gradient(r_coords)
+    dtheta = np.gradient(theta_coords)
+    dphi = np.gradient(phi_coords)
+    
+    # 广播坐标差
+    _, _, dR_grid = np.meshgrid(phi_coords, theta_coords, dr, indexing='ij')
+    _, dT_grid, _ = np.meshgrid(phi_coords, dtheta, r_coords, indexing='ij')
+    dP_grid, _, _ = np.meshgrid(dphi, theta_coords, r_coords, indexing='ij')
+
+    grad_P_r = grad_P_r_raw / dR_grid
+    grad_P_theta = grad_P_theta_raw / (r_grid * dT_grid + 1e-30)
+    grad_P_phi = grad_P_phi_raw / (r_grid * np.sin(theta_grid) * dP_grid + 1e-30)
+    
+    grad_P_mag = np.sqrt(grad_P_r**2 + grad_P_theta**2 + grad_P_phi**2) + 1e-30
+
+    # --- 4. 候选点筛选 (局部法向马赫数) ---
+    # 法向量 n = grad(P_tot) / |grad(P_tot)| [cite: 7833]
+    n_r, n_theta, n_phi = grad_P_r/grad_P_mag, grad_P_theta/grad_P_mag, grad_P_phi/grad_P_mag
+    v_dot_n = vel1 * n_r + vel2 * n_theta + vel3 * n_phi
+    
+    local_mach = v_dot_n / (v_fast + 1e-30)
+    
+    # 初筛条件：马赫数阈值 + 压强梯度阈值 [cite: 7832]
+    candidate_mask = (local_mach >= mach_threshold_loose) & (v_dot_n > 0)
+    if grad_p_filter_quantile > 0:
+        p_threshold = np.quantile(grad_P_mag, grad_p_filter_quantile)
+        candidate_mask &= (grad_P_mag > p_threshold)
+    
+    candidate_indices = np.argwhere(candidate_mask)
+    print(f"  Found {len(candidate_indices)} candidate cells.")
+
+    # --- 5. 稳健验证 (Gradient Marching) ---
+    final_shock_mask = np.zeros_like(press, dtype=bool)
+    upstream_mach_grid = np.zeros_like(press)
+    
+    # 逻辑梯度用于索引回溯
+    gk, gj, gi = np.gradient(p_tot)
+
+    for k, j, i in candidate_indices:
+        # 确定主导轴进行回溯 [cite: 8440]
+        dominant_axis = np.argmax([np.abs(gk[k,j,i]), np.abs(gj[k,j,i]), np.abs(gi[k,j,i])])
+        
+        dk, dj, di = 0, 0, 0
+        if dominant_axis == 0: dk = -int(np.sign(gk[k,j,i]))
+        elif dominant_axis == 1: dj = -int(np.sign(gj[k,j,i]))
+        else: di = -int(np.sign(gi[k,j,i]))
+
+        # 采样上下游 (State 1: Upstream, State 2: Downstream)
+        ku, ju, iu = np.clip([k + dk*march_cells, j + dj*march_cells, i + di*march_cells], 0, [nk-1, nj-1, ni-1])
+        kd, jd, id_ = np.clip([k - dk*march_cells, j - dj*march_cells, i - di*march_cells], 0, [nk-1, nj-1, ni-1])
+
+        p1_tot = p_tot[ku, ju, iu]
+        p2_tot = p_tot[kd, jd, id_]
+
+        # 压缩性验证：下游总压必须大于上游 [cite: 7837, 8514]
+        if p2_tot <= p1_tot * 1.05: continue 
+
+        # 使用总压跳变反推物理马赫数 (MHD 激波近似公式) [cite: 8412]
+        press_ratio = p2_tot / p1_tot
+        m_phys_sq = 1.0 + (press_ratio - 1.0) * (gamma + 1.0) / (2.0 * gamma)
+        m_phys = np.sqrt(m_phys_sq)
+
+        if m_phys >= min_physical_mach:
+            final_shock_mask[k,j,i] = True
+            upstream_mach_grid[k,j,i] = m_phys
+
+    print(f"  Verified {np.sum(final_shock_mask)} MHD shock cells.")
+    
+    # 填充返回结构 (保持与 nt_electron 兼容)
+    # 计算下游温度与电子密度 (用于非热电子计算)
+    M_P, K_B = 1.6726e-24, 1.3806e-16
+    mu = 0.5 # 完全电离气体的平均分子量 [cite: 8513]
+    downstream_temp = (press * mu * M_P) / (rho * K_B)
+    downstream_ne = rho / M_P
+
+    return {
+        "mask": final_shock_mask,
+        "upstream_mach": upstream_mach_grid,
+        "downstream_temp": downstream_temp,
+        "downstream_n_e": downstream_ne,
+        "grad_p_mag": grad_P_mag
+    }
+
+
 import matplotlib.pyplot as plt
 import numpy as np
 
