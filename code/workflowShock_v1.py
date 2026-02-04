@@ -85,7 +85,6 @@ def analyze_snapshot_full_pipeline(filename, config):
     dir_shock_plots = os.path.join(config['output_directory'], 'MHDshock_visuals')
     os.makedirs(dir_shock_plots, exist_ok=True)
 
-
     # --- 阶段一：数据加载/重建 ---
     full_data = None
     if config.get('load_full_data_checkpoint', False) and os.path.exists(full_data_checkpoint_filename):

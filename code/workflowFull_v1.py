@@ -48,7 +48,7 @@ try:
     from pyathena import athena_read
     import ipole as ipole_api
     # 从你的科学计算文件中导入函数
-    from shock_v1 import find_shocks_in_roi_robust,  visualize_shock_projection_dual_range, visualize_shock_3d_interactive_html
+    from shock_v1 import find_shocks_in_roi_mhd,  visualize_shock_projection_dual_range, visualize_shock_3d_interactive_html
     from nt_electron_v1 import calculate_nonthermal_electrons, plot_diagnostic_histograms, plot_diagnostic_correlations
     from ipole_input_v0 import create_ipole_input_h5, plot_ipole_output
 
@@ -176,7 +176,7 @@ def analyze_snapshot_full_pipeline(filename, config):
 
     # --- 阶段三：激波探测 ---
     print("  Step B: Finding shocks...")
-    shock_properties = find_shocks_in_roi_robust(roi_data, **config["shock_params"]) 
+    shock_properties = find_shocks_in_roi_mhd(roi_data, **config["shock_params"]) 
     
     # --- 阶段四：非热电子计算 ---
     print("  Step C: Calculating non-thermal electrons...")
@@ -193,14 +193,8 @@ def analyze_snapshot_full_pipeline(filename, config):
     # --- 阶段五：诊断与可视化 (激波 + 诊断图) ---
     print("  Step D: Generating diagnostic visualizations...")
     
-    # overview_plot_filename = os.path.join(dir_shock_plots, f"{base_name}_shock_overview_slice.png")
-    # visualize_shock_overview(roi_data, shock_properties, base_name, overview_plot_filename, config)
-
-    projection_plot_filename = os.path.join(dir_shock_plots, f"{base_name}_shock_projection_dual.png")
-    visualize_shock_projection_dual_range(roi_data, shock_properties, base_name, projection_plot_filename)
-
-    # xz_plane_plot_filename = os.path.join(dir_shock_plots, f"{base_name}_shock_plane_xz.png")
-    # visualize_shock_xz_plane(roi_data, shock_properties, base_name, xz_plane_plot_filename, config)
+    # projection_plot_filename = os.path.join(dir_shock_plots, f"{base_name}_shock_projection_dual.png")
+    # visualize_shock_projection_dual_range(roi_data, shock_properties, base_name, projection_plot_filename)
 
     vis_3d_filename_html = os.path.join(dir_shock_plots, f"{base_name}_shock_3d_interactive.html")
     visualize_shock_3d_interactive_html(roi_data, shock_properties, base_name, vis_3d_filename_html)
@@ -218,7 +212,7 @@ def analyze_snapshot_full_pipeline(filename, config):
     final_png_name = os.path.join(dir_final_images, f"{base_name}_final_image.png")
     
     create_ipole_input_h5(ipole_input_h5, roi_data, shock_properties, nonthermal_props, spin=config['spin'])
-    return
+    
     print(f"--- Step F: Running IPOLE via ipole.py API... ---")
     
     ipole_args = {key: config['ipole_params'][key] for key in ['thetacam', 'freqcgs', 'M_unit', 'trat_j', 'trat_d', 'sigma_cut', 'fov']}
@@ -267,12 +261,12 @@ if __name__ == '__main__':
     config = {
         # --- 路径配置 ---
         "data_directory": os.path.join(CPFS_ROOT_PATH, "data_test3/"), 
-        "output_directory": os.path.join(CPFS_ROOT_PATH, "workflow_output_DSA_run_02/"), # 建议为新运行设置新输出目录
+        "output_directory": os.path.join(CPFS_ROOT_PATH, "workflow_output_DSA_run02/"), # 建议为新运行设置新输出目录
         "ipole_executable_path": os.path.join(HOME_PATH, "ipole-DSA/ipole"),
         
         # --- 工作流控制 ---
-        "save_full_data_checkpoint": False,
-        "load_full_data_checkpoint": False,
+        "save_full_data_checkpoint": False, #老旧功能，数据检查点
+        "load_full_data_checkpoint": False, #老旧功能，数据检查点
         "auto_cleanup": False, # [新增] 清理 ipole_input.h5
 
         # --- ROI 切片参数 ---

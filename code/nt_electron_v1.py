@@ -83,7 +83,7 @@ def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, x
         # --- 步骤 5: 计算线性总能量比 ξ_lin (论文公式 A.11) ---
         # 假设 T1 << T2，则 ΔE_th ≈ E_th_downstream
         E_nonthermal = eta_lin * K_inj * n_e2_shocks * M_E * C_LIGHT**2
-        E_thermal_increase = (3.0/2.0) * n_e2_shocks * K_B * T2_shocks # 简化近似
+        E_thermal_increase = (3.0) * n_e2_shocks * K_B * T2_shocks # 简化近似
         
         # 为避免除以零
         xi_lin = np.divide(E_nonthermal, E_thermal_increase, out=np.zeros_like(E_nonthermal), where=E_thermal_increase!=0)
@@ -99,7 +99,10 @@ def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, x
         norm_factor[delta == 0] = 1.0
         
         C = norm_factor * f_e_p_min * p_min**q
-        C_grid[mask] = C
+        # 计算总数密度 N_inj (论文 A.6 式)
+        N_inj = (C * p_min**(1.0 - q)) / (q - 1.0)
+        C_grid[mask] = N_inj  # 现在 C_grid 存储的是真正的电子密度N_inj
+
         print("  Final normalization 'C' calculated using full physics model.")
 
     nonthermal_properties = {"q_grid": q_grid,"C_grid": C_grid,"mask": mask}

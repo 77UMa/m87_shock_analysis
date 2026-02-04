@@ -21,7 +21,7 @@ CPFS_ROOT_PATH = "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238"
 # IPOLE 程序路径
 IPOLE_BIN = os.path.join(HOME_PATH, "ipole-DSA/ipole") 
 
-DATA_PATH = os.path.join(CPFS_ROOT_PATH, "workflow_output_DSA_run_02/ipole_inputs/")
+DATA_PATH = os.path.join(CPFS_ROOT_PATH, "workflow_output_DSA_run02/ipole_inputs/")
 # 输入 HDF5 文件路径 (由 workflowFull 生成的输入文件)
 INPUT_H5 = os.path.join(DATA_PATH, "mad98.prim.00426_ipole_input.h5")
 
@@ -174,7 +174,7 @@ def main():
     axes[1,2].axis('off') # 留空
 
     plt.tight_layout()
-    plot_path = os.path.join(OUTPUT_DIR, "comparison_results.png")
+    plot_path = os.path.join(OUTPUT_DIR, "comparison_results_mhd.png")
     plt.savefig(plot_path)
     print(f"\nResults saved to {OUTPUT_DIR}")
     print(f"Plot saved to {plot_path}")
