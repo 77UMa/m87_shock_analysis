@@ -212,7 +212,8 @@ def analyze_snapshot_full_pipeline(filename, config):
     final_png_name = os.path.join(dir_final_images, f"{base_name}_final_image.png")
     
     create_ipole_input_h5(ipole_input_h5, roi_data, shock_properties, nonthermal_props, spin=config['spin'])
-    
+
+    return # 后面的工作就交给compare_models了
     print(f"--- Step F: Running IPOLE via ipole.py API... ---")
     
     ipole_args = {key: config['ipole_params'][key] for key in ['thetacam', 'freqcgs', 'M_unit', 'trat_j', 'trat_d', 'sigma_cut', 'fov']}
@@ -261,7 +262,7 @@ if __name__ == '__main__':
     config = {
         # --- 路径配置 ---
         "data_directory": os.path.join(CPFS_ROOT_PATH, "data_test3/"), 
-        "output_directory": os.path.join(CPFS_ROOT_PATH, "workflow_output_DSA_run02/"), # 建议为新运行设置新输出目录
+        "output_directory": os.path.join(CPFS_ROOT_PATH, "workflow_output_DSA_run03/"), # 建议为新运行设置新输出目录
         "ipole_executable_path": os.path.join(HOME_PATH, "ipole-DSA/ipole"),
         
         # --- 工作流控制 ---

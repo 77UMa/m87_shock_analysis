@@ -2,88 +2,114 @@ import numpy as np
 import h5py
 import os
 import matplotlib.pyplot as plt
+import sys
 
-def create_ipole_input_h5(ipole_h5_filename, roi_data, shock_properties, nonthermal_props, spin):
-    """
-    为新版 ipole 生成完全兼容的 HDF5 输入文件。
-    [从 workflowFull_v1.4.0.py 恢复]
-    """
-    print(f"--- Step E: Creating IPOLE input file: {os.path.basename(ipole_h5_filename)} ---")
-    gamma = 4.0/3.0 # 根据Yang et. al 2024选取 [cite: 6003-6824]
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+pyathena_path = os.path.join(script_dir, '..', 'pyathena')
+sys.path.insert(0, pyathena_path)
+# 确保能找到 pyathena
+# sys.path.insert(0, '/path/to/your/pyathena')
+from pyathena import athena_read
+from shock_v1 import find_shocks_in_roi_mhd
+from nt_electron_v1 import calculate_nonthermal_electrons
+
+def create_ipole_input_dsa_native(athdf_filename, output_h5, config):
+    # 1. 沿用 Native 模式读取数据
+    data = athena_read.athdf(athdf_filename, level=4)
+    # ... (提取 rho, press, vel, b 字段，同 Native 脚本) ...
+    gamma = 4.0/3.0 # MAD98 默认绝热指数 [cite: 1299]
+    rho = data['rho']
+    press = data['press']
+    uu = press / (gamma - 1.0) # 内能计算
     
-    # 确保我们有 'Bcc' 变量
-    if 'Bcc1' not in roi_data or 'Bcc2' not in roi_data or 'Bcc3' not in roi_data:
-        print("  Error: 'Bcc' (cell-centered B field) not found in roi_data. Using 'B' (face-centered) as fallback.")
-        # 注意：这在物理上不完全准确，但作为备用方案
-        b1, b2, b3 = roi_data.get('B1', np.zeros_like(roi_data['press'])), \
-                     roi_data.get('B2', np.zeros_like(roi_data['press'])), \
-                     roi_data.get('B3', np.zeros_like(roi_data['press']))
+    # 优先使用胞中心磁场 Bcc
+    if 'Bcc1' in data:
+        b1, b2, b3 = data['Bcc1'], data['Bcc2'], data['Bcc3']
     else:
-        b1, b2, b3 = roi_data['Bcc1'], roi_data['Bcc2'], roi_data['Bcc3']
-
-    rho, press = roi_data['rho'], roi_data['press']
-    uu = press / (gamma - 1.0)
-    vel1, vel2, vel3 = roi_data['vel1'], roi_data['vel2'], roi_data['vel3']
+        b1, b2, b3 = data['B1'], data['B2'], data['B3']
+        
+    v1, v2, v3 = data['vel1'], data['vel2'], data['vel3']
+    
+    # 获取网格维度 (athena_read 默认返回 nz, ny, nx)
     nk, nj, ni = rho.shape
-    n1, n2, n3 = ni, nj, nk
+    
+    # 2. 坐标参数提取
+    # 注意：ipole 的 dx 需要对应 log(r)
+    r_coords = data['x1f']
+    th_coords = data['x2f']
+    ph_coords = data['x3f']
+    
+    startx1 = np.log(r_coords[0])
+    startx2 = th_coords[0]
+    startx3 = ph_coords[0]
+    
+    dx1 = np.log(r_coords[1] / r_coords[0])
+    dx2 = th_coords[1] - th_coords[0]
+    dx3 = ph_coords[1] - ph_coords[0] if nk > 1 else 2 * np.pi
+    # 2. 运行 3D MHD 激波探测 (使用之前为您提供的 MHD 升级版函数)
+    # 注意：确保传递正确的物理坐标以计算梯度
+    shock_props = find_shocks_in_roi_mhd(data, **config["shock_params"])
+    
+    # 3. 计算非热电子性质 (使用您修正过的 N_inj 逻辑)
+    # 确保此处返回的是 N_inj 而非归一化常数 C
+    nonthermal_props = calculate_nonthermal_electrons(shock_props, **config["nt_params"])
 
-    with h5py.File(ipole_h5_filename, 'w') as f:
-        f.create_dataset('t', data=roi_data.get('Time', 0.0), dtype='float64')
-        f.create_dataset('dump_cadence', data=1.0, dtype='float64')
+    # 4. 生成兼容 ipole-DSA 的 HDF5
+    with h5py.File(output_h5, 'w') as f:
+        # --- 写入 Native 模式的 Header, Geom, Prims ---
+        # ... (此处省略，代码完全拷贝自您的 create_thermal_native_h5) ...
+        # 顶层元数据
+        f.create_dataset('t', data=data.get('Time', 0.0))
+        f.create_dataset('dump_cadence', data=1.0)
         
-        header = f.create_group('header')
-        header.create_dataset('n1', data=n1, dtype='int32')
-        header.create_dataset('n2', data=n2, dtype='int32')
-        header.create_dataset('n3', data=n3, dtype='int32')
-        header.create_dataset('n_prim', data=8, dtype='int32')
-        header.create_dataset('gam', data=gamma, dtype='float64')
-        header.create_dataset('metric', data=np.string_('MKS'))
-        prim_names_list = ['RHO', 'UU', 'U1', 'U2', 'U3', 'B1', 'B2', 'B3']
-        string_dt = h5py.special_dtype(vlen=str)
-        header.create_dataset('prim_names', data=np.array(prim_names_list, dtype=string_dt), dtype=string_dt)
-
-        geom = header.create_group('geom')
-        geom.create_dataset('startx1', data=np.log(roi_data['x1f'][0]), dtype='float64')
-        geom.create_dataset('startx2', data=roi_data['x2f'][0], dtype='float64') # x2 (theta) 通常是线性
-        geom.create_dataset('startx3', data=roi_data['x3f'][0], dtype='float64') # x3 (phi) 通常是线性
+        # Header 组
+        hdr = f.create_group('header')
+        hdr.create_dataset('n1', data=ni, dtype='i4')
+        hdr.create_dataset('n2', data=nj, dtype='i4')
+        hdr.create_dataset('n3', data=nk, dtype='i4')
+        hdr.create_dataset('n_prim', data=8, dtype='i4')
+        hdr.create_dataset('gam', data=gamma)
+        hdr.create_dataset('has_electrons', data=0, dtype='i4')
+        hdr.create_dataset('metric', data=np.string_("MKS")) # 显式字节流
         
-        dx1 = np.log(roi_data['x1f'][1] / roi_data['x1f'][0])
-        dx2 = roi_data['x2f'][1] - roi_data['x2f'][0]
-        dx3 = roi_data['x3f'][1] - roi_data['x3f'][0] if n3 > 1 else 2 * np.pi
+        # 几何组
+        geom = hdr.create_group('geom')
+        geom.create_dataset('startx1', data=startx1)
+        geom.create_dataset('startx2', data=startx2)
+        geom.create_dataset('startx3', data=startx3)
+        geom.create_dataset('dx1', data=dx1)
+        geom.create_dataset('dx2', data=dx2)
+        geom.create_dataset('dx3', data=dx3)
         
-        geom.create_dataset('dx1', data=dx1, dtype='float64')
-        geom.create_dataset('dx2', data=dx2, dtype='float64')
-        geom.create_dataset('dx3', data=dx3, dtype='float64')
-
+        # MKS 特定参数 (补齐 R0 以防万一)
         mks = geom.create_group('mks')
-        mks.create_dataset('a', data=spin, dtype='float64')
-        mks.create_dataset('r_in', data=roi_data['x1f'][0], dtype='float64')
-        mks.create_dataset('r_out', data=roi_data['x1f'][-1], dtype='float64')
-        mks.create_dataset('hslope', data=1.0, dtype='float64')
-        r_horizon = 1.0 + np.sqrt(1.0 - spin**2)
-        mks.create_dataset('r_eh', data=r_horizon, dtype='float64')
-
-        prims_stack = np.stack([rho, uu, vel1, vel2, vel3, b1, b2, b3], axis=-1)
-        prims_final = prims_stack.transpose(2, 1, 0, 3) # (nx, ny, nz, nvar)
-        f.create_dataset('prims', data=prims_final, dtype='float32')
-
-
-        # --- 注入非热电子物理 ---
+        mks.create_dataset('a', data=spin)
+        mks.create_dataset('r_in', data=r_coords[0])
+        mks.create_dataset('r_out', data=r_coords[-1])
+        mks.create_dataset('hslope', data=hslope)
+        mks.create_dataset('R0', data=R0) # 显式加入 R0
+        mks.create_dataset('r_eh', data=1.0 + np.sqrt(1.0 - spin**2))
+        
+        # 原始数据平铺 (Transpose 确保顺序为 nx, ny, nz)
+        # athena_read: (k, j, i) -> ipole: (i, j, k)
+        prims = np.stack([rho, uu, v1, v2, v3, b1, b2, b3], axis=-1)
+        prims_final = prims.transpose(2, 1, 0, 3).astype('f4')
+        f.create_dataset('prims', data=prims_final)
+        # --- 注入 DSA 物理量 ---
+        mask = shock_props['mask']
         q_grid = nonthermal_props['q_grid']
-        kel_grid = np.where(shock_properties['mask'], 1, 0) # 1=非热, 0=热
+        p_grid = q_grid - 1.0
+        p_grid[~mask] = 0.0 # 非激波区设为 0
         
-        # [cite_start]p = q - 1 [cite: 5606-5609, 5344-5347]
-        # IPOLE 需要的是谱指数 p，而 DSA 计算的是 q。
-        p_grid = q_grid - 1.0 
-        p_grid[~shock_properties['mask']] = 0.0 # 在非激波区设为0
-        
-        # 确保维度正确 (nx, ny, nz)
-        # 建议将最后三行稍微修改为：
-        f.create_dataset('KEL', data=np.ascontiguousarray(kel_grid.transpose(2, 1, 0)), dtype='float64')
-        f.create_dataset('UNTH', data=np.ascontiguousarray(nonthermal_props['C_grid'].transpose(2, 1, 0)), dtype='float64')
-        f.create_dataset('p', data=np.ascontiguousarray(p_grid.transpose(2, 1, 0)), dtype='float64')
+        # 写入关键数据集 (注意维度顺序 nx, ny, nz)
+        f.create_dataset('KEL', data=mask.transpose(2, 1, 0).astype('f8'))
+        f.create_dataset('UNTH', data=nonthermal_props['C_grid'].transpose(2, 1, 0).astype('f8')) # 这里其实是 N_inj
+        f.create_dataset('p', data=p_grid.transpose(2, 1, 0).astype('f8'))
 
-    print(f"  Successfully created IPOLE input file.")
+    print(f"--- Native-DSA Input Created: {output_h5} ---")
 
 
 def plot_ipole_output(h5_filename, fov_muas, output_png_filename):

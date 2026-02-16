@@ -154,13 +154,13 @@ def plot_diagnostic_histograms(shock_properties, nonthermal_props, snapshot_name
     # 3. 归一化 log(C) 直方图
     if len(logC) > 0:
         ax3.hist(logC, bins=50, color='purple', alpha=0.7, log=True)
-        ax3.set_title("Normalization (log10 C) Distribution")
-        ax3.set_xlabel("log10(C)")
+        ax3.set_title("Nonthermal Electron Density (log10 N) Distribution")
+        ax3.set_xlabel("log10(N)")
         ax3.set_ylabel("Count (log scale)")
         ax3.axvline(logC.mean(), color='red', linestyle='dashed', linewidth=2, label=f'Mean: {logC.mean():.2f}')
         ax3.legend()
     else:
-        ax3.set_title("Normalization (log10 C) Distribution")
+        ax3.set_title("Normalization (log10 N) Distribution")
         ax3.text(0.5, 0.5, "No C > 0 values found", horizontalalignment='center', verticalalignment='center', transform=ax3.transAxes)
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -185,7 +185,7 @@ def plot_diagnostic_correlations(shock_properties, nonthermal_props, snapshot_na
     M1_for_C = M1[C > 0] # 确保 M1 和 logC 数组对齐
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-    fig.suptitle(f"Non-Thermal Electron Diagnostics (2D Correlations) for {snapshot_name}", fontsize=16)
+    fig.suptitle(f"Nonthermal Electron Diagnostics (2D Correlations) for {snapshot_name}", fontsize=16)
 
     # [cite_start]1. M1 vs q (物理检验) [cite: 5344-5347]
     # 预期：M1 越大，q 越小，且 q 趋近于 1.5
@@ -202,11 +202,11 @@ def plot_diagnostic_correlations(shock_properties, nonthermal_props, snapshot_na
     if len(logC) > 0:
         hb2 = ax2.hexbin(M1_for_C, logC, gridsize=50, cmap='inferno', norm=LogNorm())
         fig.colorbar(hb2, ax=ax2, label='Count (log scale)')
-        ax2.set_title("Injection Check: $M_1$ vs. $log_{10}(C)$")
+        ax2.set_title("Injection Check: $M_1$ vs. $log_{10}(N)$")
         ax2.set_xlabel("Upstream Mach Number ($M_1$)")
-        ax2.set_ylabel("Log10(Normalization C)")
+        ax2.set_ylabel("Log10(Normalization N)")
     else:
-        ax2.set_title("Injection Check: $M_1$ vs. $log_{10}(C)$")
+        ax2.set_title("Injection Check: $M_1$ vs. $log_{10}(N)$")
         ax2.text(0.5, 0.5, "No C > 0 values found", horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes)
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
