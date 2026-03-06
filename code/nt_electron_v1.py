@@ -1,3 +1,6 @@
+'''
+科学计算模块的一部分，负责非热电子物理，按照Xia et al. (2025) 附录A进行计算
+'''
 import numpy as np
 import h5py
 import sys

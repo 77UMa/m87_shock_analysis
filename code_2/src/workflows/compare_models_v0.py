@@ -25,27 +25,27 @@ CPFS_ROOT_PATH = "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA
 # IPOLE 程序路径
 IPOLE_BIN = os.path.join(HOME_PATH, "ipole-DSA/ipole") 
 
-DATA_PATH = os.path.join(CPFS_ROOT_PATH, "workflowV2_run01/ipole_inputs/")
+DATA_PATH = os.path.join(CPFS_ROOT_PATH, "workflowV2_advection02/ipole_inputs/")
 # 输入 HDF5 文件路径 (由 workflowFull 生成的输入文件)
-INPUT_H5 = os.path.join(DATA_PATH, "mad98.prim.00455_dsa_input.h5")
+INPUT_H5 = os.path.join(DATA_PATH, "mad98.prim.00469_dsa_input.h5")
 
-FOV = 500
+FOV = 300
 # 观测参数 (请与你之前的运行参数保持一致)
 PARAMS = {
     "thetacam": 163,
-    "freqcgs": 230e9,
+    "freqcgs": 86e9,
     "M_unit": 1e25,
     "trat_j": 1.0,
     "trat_d": 80.0,
     "sigma_cut": 5.0,
     "fov": FOV,
-    "nx": 500,
-    "ny": 500
+    "nx": FOV,
+    "ny": FOV
 }
 
 
 # 输出目录
-OUTPUT_DIR = os.path.join(CPFS_ROOT_PATH, "Radiation_run01")
+OUTPUT_DIR = os.path.join(CPFS_ROOT_PATH, "Radiation_run04_86GHz")
 # ===========================================
 
 def run_ipole(input_file, output_file, emission_type=None):

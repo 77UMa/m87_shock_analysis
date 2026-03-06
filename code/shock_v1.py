@@ -1,3 +1,6 @@
+'''
+科学计算模块的一部分，负责激波物理，将Lovely et al. (1999)的算法推广到MHD情况
+'''
 import numpy as np
 import h5py
 import sys

@@ -1,9 +1,13 @@
+'''
+输入`workflowFull`生成的ipole输入文件，比较3种模型下的辐射形态。
+'''
 import os
 import sys
 import h5py
 import numpy as np
 import subprocess
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from astropy.io import fits
 
 try:
@@ -16,15 +20,16 @@ except ImportError as e:
 
 # ================= 配置区域 =================
 HOME_PATH = "/home/cyh_22307110238/project/Shockwave"
-CPFS_ROOT_PATH = "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238"
+CPFS_ROOT_PATH = "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA"
 
 # IPOLE 程序路径
 IPOLE_BIN = os.path.join(HOME_PATH, "ipole-DSA/ipole") 
 
-DATA_PATH = os.path.join(CPFS_ROOT_PATH, "workflowV2_native_run01/ipole_inputs/")
+DATA_PATH = os.path.join(CPFS_ROOT_PATH, "workflowV2_native_run02/ipole_inputs/")
 # 输入 HDF5 文件路径 (由 workflowFull 生成的输入文件)
 INPUT_H5 = os.path.join(DATA_PATH, "mad98.prim.00426_dsa_input.h5")
 
+FOV = 500
 # 观测参数 (请与你之前的运行参数保持一致)
 PARAMS = {
     "thetacam": 163,
@@ -33,9 +38,9 @@ PARAMS = {
     "trat_j": 1.0,
     "trat_d": 80.0,
     "sigma_cut": 5.0,
-    "fov": 200,
-    "nx": 160,
-    "ny": 160
+    "fov": FOV,
+    "nx": 500,
+    "ny": 500
 }
 
 # 输出目录
@@ -152,19 +157,27 @@ def main():
     print(f"Model C (Shock-DSA/Our):     {flux_c:.4f}")
     print("="*30)
 
+    # ================= 统一对数颜色标度处理 =================
+    vmax_global = max(np.max(img_a), np.max(img_b), np.max(img_c))
+    # 对于对数标度，最小值不能为0。通常设置为全局最大值的 10^-4 或 10^-5 作为一个合理的本底下限
+    vmin_log = vmax_global * 1e-4 
+
+    # 创建统一的对数归一化器
+    norm_log = mcolors.LogNorm(vmin=vmin_log, vmax=vmax_global)
+
     # 绘图
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     
-    # 第一行：原始图像
-    im0 = axes[0,0].imshow(img_a, cmap='afmhot', origin='lower')
+    # 第一行：原始图像 (使用 LogNorm)
+    im0 = axes[0,0].imshow(img_a, cmap='afmhot', origin='lower', norm=norm_log)
     axes[0,0].set_title("A: Thermal Only")
     plt.colorbar(im0, ax=axes[0,0])
 
-    im1 = axes[0,1].imshow(img_b, cmap='afmhot', origin='lower')
-    axes[0,1].set_title("B: Reconnection (Simple Reconnection Model)")
+    im1 = axes[0,1].imshow(img_b, cmap='afmhot', origin='lower', norm=norm_log)
+    axes[0,1].set_title("B: Reconnection Model")
     plt.colorbar(im1, ax=axes[0,1])
 
-    im2 = axes[0,2].imshow(img_c, cmap='afmhot', origin='lower')
+    im2 = axes[0,2].imshow(img_c, cmap='afmhot', origin='lower', norm=norm_log)
     axes[0,2].set_title("C: Shock-DSA (Xia+25)")
     plt.colorbar(im2, ax=axes[0,2])
 
@@ -184,7 +197,7 @@ def main():
     axes[1,2].axis('off') # 留空
 
     plt.tight_layout()
-    plot_path = os.path.join(OUTPUT_DIR, "comparison_results_mhd_native_fov200.png")
+    plot_path = os.path.join(OUTPUT_DIR, f"comparison_results_mhd_native_fov{FOV}.png")
     plt.savefig(plot_path)
     print(f"\nResults saved to {OUTPUT_DIR}")
     print(f"Plot saved to {plot_path}")
