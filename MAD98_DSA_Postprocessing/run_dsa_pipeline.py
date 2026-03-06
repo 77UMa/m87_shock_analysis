@@ -31,7 +31,7 @@ pyathena_path = os.path.join(script_dir, '..', 'pyathena')
 sys.path.insert(0, pyathena_path)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from utils.logging_config import setup_logging, log_summary
+from utils.logging_config import setup_logging
 from workflows.workflowFull_v2 import process_snapshot
 from workflows.compare_models_v0 import main as compare_models_main
 

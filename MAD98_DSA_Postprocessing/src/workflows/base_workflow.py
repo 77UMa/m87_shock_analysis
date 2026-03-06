@@ -4,10 +4,7 @@
 """
 import os
 import sys
-import glob
 import gc
-import multiprocessing as mp
-from functools import partial
 import numpy as np
 import h5py
 
@@ -19,8 +16,6 @@ try:
     from pyathena import athena_read
     from src.core.shock_v1 import find_shocks_in_roi_mhd
     from src.core.nt_electron_v1 import calculate_nonthermal_electrons
-    # 导入平流扩散模块
-    from src.core.advection_v0 import solve_steady_advection
 except ImportError as e:
     print(f"Fatal Error: 无法加载科学计算模块. {e}")
     sys.exit(1)
@@ -105,7 +100,7 @@ def load_and_slice_data(filename, roi_params):
     return roi_data
 
 
-def calculate_dsa_physics(roi_data, shock_params, nt_params, enable_advection=False, config=None):
+def calculate_dsa_physics(roi_data, shock_params, nt_params):
     """
     计算激波物理和非热电子
 
@@ -113,12 +108,10 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, enable_advection=Fa
         roi_data: ROI切片数据
         shock_params: 激波探测参数
         nt_params: 非热电子参数
-        enable_advection: 是否启用平流-冷却扩散
-        config: 完整配置（用于平流计算）
 
     Returns:
         shock_props: 激波属性
-        nonthermal_props: 非热电子属性（可能经过平流演化）
+        nonthermal_props: 非热电子属性
     """
     print("Calculating shock properties...")
     shock_props = find_shocks_in_roi_mhd(roi_data, **shock_params)
@@ -126,17 +119,6 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, enable_advection=Fa
     if np.any(shock_props["mask"]):
         print("Calculating non-thermal electrons...")
         nonthermal_props = calculate_nonthermal_electrons(shock_props, **nt_params)
-
-        # 可选：执行平流-冷却扩散计算
-        if enable_advection and config is not None:
-            print(">>> Applying advection-cooling diffusion model...")
-            try:
-                evolved_props = solve_steady_advection(roi_data, nonthermal_props, config)
-                nonthermal_props = evolved_props
-                print(">>> Advection-cooling diffusion completed.")
-            except Exception as e:
-                print(f"Warning: Advection calculation failed: {e}")
-                print(">>> Using original non-thermal properties.")
     else:
         nonthermal_props = {
             'q_grid': np.zeros_like(roi_data['rho']),
@@ -268,23 +250,3 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config):
         f.create_dataset('KEL', data=mask.transpose(2, 1, 0).astype('f8')) # KEL 通常用作开关
         f.create_dataset('UNTH', data=c_grid.transpose(2, 1, 0).astype('f8')) # 非热电子数密度/归一化常数
         f.create_dataset('p', data=p_grid.transpose(2, 1, 0).astype('f8')) # 谱指数
-
-
-
-def run_parallel_workflow(file_list, config, process_func):
-    """
-    运行并行工作流
-    """
-    SAFE_MAX_WORKERS = config.get('max_concurrent_tasks', 8)
-
-    print(f"Found {len(file_list)} files to process.")
-    print(f"Using {SAFE_MAX_WORKERS} worker processes.")
-
-    task_func = partial(process_func, config=config)
-
-    with mp.Pool(processes=SAFE_MAX_WORKERS, maxtasksperchild=1) as pool:
-        print(f"Submitting {len(file_list)} tasks...")
-        results = pool.map(task_func, file_list)
-        print(f"All {len(file_list)} tasks have been processed.")
-
-    return results

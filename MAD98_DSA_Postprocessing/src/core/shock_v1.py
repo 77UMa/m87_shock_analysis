@@ -22,23 +22,12 @@
 - Yang et al. (2024): M87喷流磁重联模型
 """
 import numpy as np
-import h5py
 import sys
 import os
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
-from matplotlib.colors import LogNorm
-# --------------------------------------------------------------------------
-# pyathena 导入
-# --------------------------------------------------------------------------
-try:
-    from pyathena import athena_read
-except ImportError:
-    # 如果直接导入失败，尝试从项目根目录导入
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    pyathena_dir = os.path.join(project_root, 'pyathena')
-    sys.path.insert(0, pyathena_dir)
-    from pyathena import athena_read
+from matplotlib.colors import Normalize, LogNorm
 # --------------------------------------------------------------------------
 def find_shocks_in_roi_robust(roi_data, gamma=4.0/3.0, 
                               mach_threshold_loose=1.05, 
@@ -325,12 +314,6 @@ def find_shocks_in_roi_mhd(roi_data, gamma=4.0/3.0,
         "grad_p_mag": grad_P_mag
     }
 
-
-import matplotlib.pyplot as plt
-import numpy as np
-
-import plotly.graph_objects as go
-import pandas as pd # Optional, but often convenient
 
 def visualize_shock_3d_interactive_html(roi_data, shock_properties, snapshot_name, html_plot_filename,
                                         x_lim=260.0, y_lim=260.0, z_lim=1200.0):

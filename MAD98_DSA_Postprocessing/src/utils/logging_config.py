@@ -16,7 +16,7 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
 
-def setup_logging(log_dir="logs", log_level=logging.INFO, log_name=None):
+def setup_logging(log_dir="logs", log_level=logging.INFO, log_name=None, logger_name='DSAWorkflow'):
     """
     设置日志配置
 
@@ -24,6 +24,7 @@ def setup_logging(log_dir="logs", log_level=logging.INFO, log_name=None):
         log_dir: 日志目录
         log_level: 日志级别
         log_name: 日志文件名（如果不提供，则使用时间戳）
+        logger_name: logger 对象的名称（用于区分不同模块）
 
     Returns:
         logger: 配置好的日志对象
@@ -38,7 +39,7 @@ def setup_logging(log_dir="logs", log_level=logging.INFO, log_name=None):
     log_file = os.path.join(log_dir, log_name)
 
     # 创建日志对象
-    logger = logging.getLogger('DSAWorkflow')
+    logger = logging.getLogger(logger_name)
     logger.setLevel(log_level)
 
     # 清除之前的处理器（避免重复）

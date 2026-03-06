@@ -5,9 +5,8 @@ DSA工作流主模块 - 负责从原始Athena++模拟数据生成ipole输入文�
 1. 加载原始.athdf格式的GRMHD模拟数据
 2. 执行ROI（感兴趣区域）切片，减少计算量
 3. 检测激波并计算激波物理性质
-4. 根据激波性质计算非热电子能谱参数
-5. 可选：执行平流-冷却扩散计算，扩展非热电子分布
-6. 生成注入DSA物理的ipole输入HDF5文件
+4. 根据激波性质计算非热电子能谱参数（可选：含平流-冷却扩散）
+5. 生成注入DSA物理的ipole输入HDF5文件
 
 使用场景：批处理大量模拟快照，生成辐射转移计算的输入文件
 """
@@ -16,7 +15,7 @@ import os
 import sys
 import time
 import numpy as np
-from src.workflows.base_workflow import load_and_slice_data, calculate_dsa_physics, save_h5_file, run_parallel_workflow
+from src.workflows.base_workflow import load_and_slice_data, calculate_dsa_physics, save_h5_file
 from src.utils.logging_config import log_start, log_finish, log_error
 
 def process_snapshot(filename, config, logger=None):
@@ -62,8 +61,6 @@ def process_snapshot(filename, config, logger=None):
             roi_data,
             config["shock_params"],
             config["nt_params"],
-            enable_advection=enable_advection,
-            config=config
         )
 
         # Step 3: 可选 - 执行平流-冷却扩散计算
@@ -120,37 +117,5 @@ def process_snapshot(filename, config, logger=None):
 
         return False
 
-# ==============================================================================
-# 入口与配置
-# ==============================================================================
-if __name__ == '__main__':
-    CPFS_PATH = "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238"
-    
-    config = {
-        "output_directory": os.path.join(CPFS_PATH, "workflowV2_native_run01/"),
-        "data_directory": os.path.join(CPFS_PATH, "data_test3/"),
-        
-        "roi_params": {
-            'r_min': 10, 'r_max': 1200,
-            'theta_min': 0.0, 'theta_max': np.pi, # 完整全域
-            'phi_min': 0.0, 'phi_max': 2*np.pi
-        },
-        
-        "shock_params": {"gamma": 4.0/3.0, "mach_threshold_loose": 1.05, "min_physical_mach": 1.7},
-        "nt_params": {"gamma": 4.0/3.0, "x_inj": 3.5, "xi_max": 0.05},
-        
-        # 【物理参数：关键补全】
-        "physics": {
-            "spin": 0.98,   # MAD98 
-            "hslope": 1.0,  # 默认无压缩 theta 坐标
-            "R0": 0.0       # 默认无径向平移
-        },
-        
-        "max_concurrent_tasks": 8 # 内存平衡
-    }
-
-    file_list = sorted(glob.glob(os.path.join(config['data_directory'], 'mad98.prim.*.athdf')))
-    task_func = partial(analyze_snapshot_full_pipeline, config=config)
-
-    with mp.Pool(processes=config['max_concurrent_tasks'], maxtasksperchild=1) as pool:
-        pool.map(task_func, file_list)
+# 本模块作为库使用，请通过 run_dsa_pipeline.py 启动完整流程：
+#   python run_dsa_pipeline.py generate_h5 --data-dir /path/to/data --output-dir /path/to/output

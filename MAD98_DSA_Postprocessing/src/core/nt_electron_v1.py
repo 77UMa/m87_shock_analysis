@@ -37,12 +37,15 @@
 - Yuan & Narayan (2014): 双温吸积流模型
 """
 import numpy as np
-import h5py
 import sys
 import os
-# 您需要在脚本开头增加这个导入，用于计算不完全贝塔函数
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from concurrent.futures import ProcessPoolExecutor
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize, LogNorm
 from scipy.special import betainc
-import pdb
 # --------------------------------------------------------------------------
 
 def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, xi_max=0.05):
@@ -146,12 +149,6 @@ def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, x
     nonthermal_properties = {"q_grid": q_grid,"C_grid": C_grid,"mask": mask}
     return nonthermal_properties
 
-import matplotlib
-matplotlib.use('Agg') # 必须在 pyplot 导入前设置，用于无GUI的服务器
-import matplotlib.pyplot as plt
-from concurrent.futures import ProcessPoolExecutor
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize, LogNorm
 
 def plot_diagnostic_histograms(shock_properties, nonthermal_props, snapshot_name, output_filename):
 
