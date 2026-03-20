@@ -48,21 +48,38 @@ from matplotlib.colors import Normalize, LogNorm
 from scipy.special import betainc
 # --------------------------------------------------------------------------
 
-def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, xi_max=0.05):
+def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, xi_max=0.05,
+                                   sigma_crit=0.1, alpha_sigma=2):
     """
     严格按照 Xia et al. (2025) 附录A 的公式计算非热电子能谱参数。
     注入效率不再是固定值，而是由激波物理动态决定。
-    
+
+    引入高磁化压低（Method B）：
+        在强磁化区域（σ >> σ_crit），DSA效率被连续压低。
+        物理依据：Sironi & Spitkovsky (2009, 2010) PIC模拟结果表明，
+        高σ的超光速（superluminal）激波构型中DSA效率趋近于零。
+        考虑到吸积盘风引起的密度涨落与激波面褶皱诱发的湍流，
+        σ_crit 可适度放宽至 0.01–0.1。
+
+        压低公式：suppression(σ) = 1 / (1 + (σ/σ_crit)^α)
+        - σ → 0 时恢复标准DSA（suppression → 1）
+        - σ >> σ_crit 时效率被压低（suppression → 0）
+        - α ≥ 2 控制过渡陡峭程度
+
     Args:
         shock_properties (dict): find_shocks_in_roi 函数返回的字典。
+            若含 'sigma_grid' 键，则启用σ压低；否则跳过。
         gamma (float): 绝热指数。
         x_inj (float): 注入参数 (论文中为 3.3 到 3.6)。
         xi_max (float): 允许非热电子占总能量增加的最高比例 (论文中为 0.05)。
-        
+        sigma_crit (float): 磁化压低临界参数。建议测试范围 0.01–0.1。
+        alpha_sigma (int/float): 压低函数的陡峭指数，须 >= 2。
+
     Returns:
-        dict: 包含 'q_grid' 和 'C_grid' 的字典。
+        dict: 包含 'q_grid'、'C_grid' 和 'sigma_suppression_grid' 的字典。
     """
-    print("Starting non-thermal electron calculation (Full Physics Model)...")
+    print(f"Starting non-thermal electron calculation (Full Physics Model, "
+          f"sigma_crit={sigma_crit}, alpha={alpha_sigma})...")
     
     # --- 步骤 0: 解包输入数据 ---
     mask = shock_properties["mask"]
@@ -75,6 +92,7 @@ def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, x
 
     q_grid = np.zeros_like(mask, dtype=float)
     C_grid = np.zeros_like(mask, dtype=float)
+    sigma_suppression_grid = np.ones_like(mask, dtype=float)  # 默认无压低
     
     if np.any(mask):
         M1_shocks = M1[mask]
@@ -142,11 +160,25 @@ def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, x
         C = norm_factor * f_e_p_min * p_min**q
         # 计算总数密度 N_inj (论文 A.6 式)
         N_inj = (C * p_min**(1.0 - q)) / (q - 1.0)
+
+        # --- 步骤 7: 高磁化压低 (Method B, Sironi & Spitkovsky 2009/2010) ---
+        # suppression(σ) = 1 / (1 + (σ/σ_crit)^α)
+        if 'sigma_grid' in shock_properties:
+            sigma_at_shocks = shock_properties['sigma_grid'][mask]
+            suppression = 1.0 / (1.0 + (sigma_at_shocks / sigma_crit) ** alpha_sigma)
+            N_inj = N_inj * suppression
+            sigma_suppression_grid[mask] = suppression
+            print(f"  σ-suppression applied: median factor={np.median(suppression):.3f}, "
+                  f"cells with factor<0.5: {np.mean(suppression < 0.5):.1%}")
+        else:
+            print("  No sigma_grid found in shock_properties; skipping σ-suppression.")
+
         C_grid[mask] = N_inj  # 现在 C_grid 存储的是真正的电子密度N_inj
 
         print("  Final normalization 'C' calculated using full physics model.")
 
-    nonthermal_properties = {"q_grid": q_grid,"C_grid": C_grid,"mask": mask}
+    nonthermal_properties = {"q_grid": q_grid, "C_grid": C_grid,
+                             "mask": mask, "sigma_suppression_grid": sigma_suppression_grid}
     return nonthermal_properties
 
 

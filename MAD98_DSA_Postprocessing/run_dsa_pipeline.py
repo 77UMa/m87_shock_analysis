@@ -88,7 +88,15 @@ def create_default_config():
             "min_physical_mach": 1.7, "grad_p_filter_quantile": 0.20,
             "march_cells": 6
         },
-        "nt_params": {"gamma": 4.0/3.0, "x_inj": 3.5, "xi_max": 0.05},
+        "nt_params": {
+            "gamma": 4.0/3.0, "x_inj": 3.5, "xi_max": 0.05,
+            # 高磁化压低参数 (Method B, feature/sigma-suppression-methodB)
+            # 物理依据：Sironi & Spitkovsky (2009, 2010) PIC模拟
+            # sigma_crit 测试范围: 0.01 ~ 0.1 (考虑湍流可适度放宽)
+            # alpha_sigma >= 2 (过渡陡峭程度)
+            "sigma_crit": 0.1,
+            "alpha_sigma": 2,
+        },
         "physics": {
             "spin": 0.98, "hslope": 1.0, "R0": 0.0,
             "enable_advection": True, "cooling_factor": 50.0,
@@ -104,6 +112,8 @@ def cmd_generate_h5(args):
     if args.data_dir: config['data_directory'] = args.data_dir
     if args.output_dir: config['output_directory'] = args.output_dir
     if args.n_workers: config['max_concurrent_tasks'] = args.n_workers
+    if args.sigma_crit is not None: config['nt_params']['sigma_crit'] = args.sigma_crit
+    if args.alpha_sigma is not None: config['nt_params']['alpha_sigma'] = args.alpha_sigma
 
     os.makedirs(config['output_directory'], exist_ok=True)
     log_dir = os.path.join(config['output_directory'], 'logs')
@@ -172,6 +182,10 @@ def main():
     parser_generate.add_argument('--data-dir', help='原始数据目录路径')
     parser_generate.add_argument('--output-dir', help='输出目录路径')
     parser_generate.add_argument('--n-workers', type=int, help='并行工作进程数')
+    parser_generate.add_argument('--sigma-crit', type=float,
+                                 help='高σ压低临界参数 (默认0.1, 测试范围0.01~0.1)')
+    parser_generate.add_argument('--alpha-sigma', type=float,
+                                 help='压低函数陡峭指数 (默认2, 须>=2)')
     parser_generate.set_defaults(func=cmd_generate_h5)
 
     parser_compare = subparsers.add_parser('compare_models', help='比较辐射图像')

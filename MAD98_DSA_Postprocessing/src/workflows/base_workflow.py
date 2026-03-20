@@ -107,7 +107,7 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params):
     Args:
         roi_data: ROI切片数据
         shock_params: 激波探测参数
-        nt_params: 非热电子参数
+        nt_params: 非热电子参数 (可含 sigma_crit, alpha_sigma 用于高σ压低)
 
     Returns:
         shock_props: 激波属性
@@ -116,7 +116,20 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params):
     print("Calculating shock properties...")
     shock_props = find_shocks_in_roi_mhd(roi_data, **shock_params)
 
+    # --- 计算磁化参数 σ = B²/2 / (ρ + u + p) ---
+    # 物理依据：Sironi & Spitkovsky (2009, 2010) PIC模拟表明高σ激波DSA效率极低
+    gamma = shock_params.get("gamma", 4.0 / 3.0)
+    B2 = (roi_data['Bcc1']**2 + roi_data['Bcc2']**2 + roi_data['Bcc3']**2)
+    uu = roi_data['press'] / (gamma - 1.0)
+    denom = roi_data['rho'] + uu + roi_data['press']
+    sigma_grid = np.where(denom > 0, B2 / (2.0 * denom), 0.0)
+    shock_props['sigma_grid'] = sigma_grid
+
     if np.any(shock_props["mask"]):
+        sigma_vals = sigma_grid[shock_props["mask"]]
+        print(f"  σ at shock cells: median={np.median(sigma_vals):.3e}, "
+              f"max={np.max(sigma_vals):.3e}, "
+              f"fraction σ>0.1: {np.mean(sigma_vals > 0.1):.1%}")
         print("Calculating non-thermal electrons...")
         nonthermal_props = calculate_nonthermal_electrons(shock_props, **nt_params)
     else:
@@ -250,3 +263,10 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config):
         f.create_dataset('KEL', data=mask.transpose(2, 1, 0).astype('f8')) # KEL 通常用作开关
         f.create_dataset('UNTH', data=c_grid.transpose(2, 1, 0).astype('f8')) # 非热电子数密度/归一化常数
         f.create_dataset('p', data=p_grid.transpose(2, 1, 0).astype('f8')) # 谱指数
+
+        # 诊断用：写入σ场和σ压低因子（不影响ipole读取）
+        if 'sigma_grid' in shock_props:
+            f.create_dataset('sigma', data=shock_props['sigma_grid'].transpose(2, 1, 0).astype('f4'))
+        if 'sigma_suppression_grid' in nonthermal_props:
+            f.create_dataset('sigma_suppression',
+                             data=nonthermal_props['sigma_suppression_grid'].transpose(2, 1, 0).astype('f4'))
