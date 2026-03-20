@@ -12,6 +12,9 @@
 *.par
 *.txt
 *.sh
+*.tex
+*.md
+test.py
 
 *.o
 *.make
