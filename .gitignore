@@ -2,6 +2,7 @@
 *.athdf
 *.npz
 *.h5 
+*.ps1
 # (如果 ipole 输出的 HDF5 需要版本控制，请移除上面这行)
 
 # Output Images / HTML

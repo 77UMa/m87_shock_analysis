@@ -28,7 +28,7 @@ $mainDiff = git status --porcelain
 if ($mainDiff) {
     Write-Host "Committing main project changes..." -ForegroundColor Yellow
     git add .
-    git commit -m "main project sync"
+    git commit -m "main project sync debugging spectral index p"
 }
 
 Write-Host "Pushing main project..." -ForegroundColor Magenta
