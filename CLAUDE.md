@@ -1,83 +1,69 @@
-### 项目主题:
-通过数值模拟，验证替代理论——即扩散激波加速（Diffusive Shock Acceleration, DSA），是否能够解释M87星系中心黑洞喷流的观测形态。
+# ⚠️ CRITICAL: Token & Performance Policy
 
-### 核心科学问题:
- Yang et al. (2024) 成功地使用“磁重联（Magnetic Reconnection）”作为粒子加速机制，复现了M87喷流的“临边增亮”等形态学特征。我们的项目旨在进行一次严谨的“证伪”或对比实验：如果我们用另一种粒子加速机制——源于 Xia et al. (2025) 的“扩散激波加速（Diffusive Shock Acceleration, DSA）”——来替换磁重联模型，我们还能复现M87的观测图像吗？如果不能，这将反向增强磁重联作为M87喷流主要加速机制的结论。
+### 1. Think-Before-Acting Protocol (CRITICAL)
+- **NO PROACTIVE SCANNING**: 严禁在未经过用户确认前对整个项目进行大规模 Hashing 或文件读取。
+- **DISCUSSION FIRST**: 在执行任何涉及多于 3 个文件的读取、编辑或运行复杂 shell 命令之前，必须先向用户简报你的“分析逻辑”和“预想步骤”。
+- **TOKEN QUOTA AWARENESS**: 意识到 Token 消耗成本。如果任务涉及大数据文件（.hdf5, .dat）或大型子模块（ipole-DSA），优先询问用户是否可以跳过。
 
-### 关键资源:
-#### 模拟数据
-源于第二篇论文 (Yang et al. 2024) 的mad98.prim.athdf系列文件，这是一个围绕快速旋转黑洞的磁囚禁盘（MAD）的3D GRMHD模拟快照。原始数据以稀疏的.athdf文件存储，高度压缩，格式如下：
-```
-Available datasets: ['B', 'Levels', 'LogicalLocations', 'prim', 'x1f', 'x1v', 'x2f', 'x2v', 'x3f', 'x3v']
+### 2. Context Awareness & Memory
+- **VERIFY STATE**: 每次任务开始时，先运行 `git log -n 1` 确认当前所处的真实 Git 分支和最后提交时间，严禁产生“虚假提交”或“记混历史”的幻觉。
+- **SUBMODULE POLICY**: 除非明确要求修改 C 代码，否则严禁扫描 `ipole-DSA/` 内部文件。将其视为黑盒调用。
 
-Shape of 'prim' dataset (hydro variables): (5, 872, 16, 4, 22)
-Shape of 'B' dataset (magnetic field): (3, 872, 16, 4, 22)
-```
+### 3. Execution Rules
+- **LOCAL VS REMOTE**: 区分本地开发环境和远程服务器环境。在执行编译（make）或大数据处理前，必须确认当前环境的计算资源。
+- **NO SILENT HANG**: 如果某个内部步骤（如索引）预计超过 30 秒，必须立即告知用户原因，并提供中断选项。
 
-#### 核心理论与算法:
-激波探测: 物理原理来自第一篇论文 (Xia et al. 2025) 及其引用的 Lovely & Haimes (1999)。将HD情况推广到了MHD情况。快磁声速使用近似：
- $v_{fast} \approx \sqrt{c_s^2 + v_A^2}$ 
-粒子加速: 物理模型和公式来自第一篇论文 (Xia et al. 2025) 的附录A。
-双温模型: 物理依据来自 Yuan & Narayan (2014) 的综述。
-激波的可能物理图像：Fabrizio Tavecchio（2021）fig.2
-![[Pasted image 20260222232628.png]]
+# Project Info
+## 1. Project Context: M87 Jet DSA Model
 
-#### 核心工具:
+- **Scientific Goal**: Test if Diffusive Shock Acceleration (DSA) can explain M87 jet limb-brightening, as an alternative to the Magnetic Reconnection model (Yang et al. 2024).
+    
+- **Core Physics**:
+    
+    - Shock detection via normal Mach number (Lovely & Haimes 1999) and entropy jump.
+        
+    - Steady-State Advection-Cooling Approximation for $N_{nth}$ distribution.
+        
+    - $\sigma$-suppression efficiency: $\xi_{\rm DSA}(\sigma) = \xi_0 \cdot [1 + (\sigma/\sigma_{\rm crit})^\alpha]^{-1}$.
+        
+- **Primary Branch**: `feature/sigma-suppression-methodB` (Active development for $\sigma$ effects).
+    
 
-1. 数据读取: pyathena Python工具包（主要用其中的athena_read.py程序来重建原始网格数据）。
-2. 数据处理（DSA物理部分）：主要包括（1）激波检测和可视化程序`shock_v1.py`；（2）非热电子性质计算程序`nt_electron_v1.py`
-3. 辐射转移: ipole C语言程序 (Mościbrodzka & Gammie 2018)，用于辐射转移计算和生成最终的合成图像。为了有效注入非热电子物理，将非热电子谱的归一化常数C和谱指数p传进去，修改了ipole并创建了它的分支ipole-DSA。目前ipole-DSA的有效性还有待检验，在此之前需要修复ipole输入文件的格式问题。
-4. 工作流，支持批处理的工作流`workflowFull_v2.py`，导入(1)和(2)进行科学分析，并生成ipole支持的.h5输入文件。
-5. `compare_models_v0.py`，调用ipole的不同模型分支进行辐射转移计算。用于对比激波加速模型，基础热辐射和简单磁重联模型的辐射图像。
+---
 
-#### 项目工作流与当前进展
-我们已经成功构建了一个从原始数据到最终IPOLE输入的完整自动化Python工作流 `workflowFull_v2.py`。以下是各步骤的详细进展：
+## 2. Technical Stack & Workflow
 
-##### 第一步：数据预处理 (状态：正在修改)
+- **Data Source**: Athena++ output (`.athdf`).
+    
+- **Processing**: Python pipeline (`run_dsa_pipeline.py`, `run_sigma_sweep.py`).
+    
+- **Radiative Transfer**: `ipole-DSA` (Customized C-code for $C$ and $p$ mapping).
+    
+- **Deployment**:
+    
+    - Development: Local machine (via Claude Code).
+        
+    - Execution/Sim: Remote Server (Sync via GitHub: `77UMa/m87_shock_analysis`).
 
-###### 任务: 
-读取ATHENA++输出的、分块且多分辨率的原始.athdf文件。
-###### 挑战与解决方案:
-原始文件体积巨大（每个时间切片完全重建后~5.6 GB），处理上千个文件会导致时间和空间的灾难。我们采用了“即时处理”流水线，在内存中完成“重建-切片-分析”的全过程，避免生成巨大的中间文件。
+## 3. Communication & Memory Protocol
 
-###### 问题
-读取和重建切片文件使用pyathena工具包中的athena_read程序完成。为了复现喷流辐射的形态，需要修改切片只在r方向进行，$\theta$和$\phi$方向不能切片。
+- **Session Continuity**:
+    
+    - Refer to `项目状态更新：M87喷流的激波加速模型验证.md` for the latest scientific baseline.
+        
+    - If a task involves multiple steps, list the plan as a checklist and wait for user "GO".
+        
+- **Physical Constants**: Ensure all unit conversions between Athena++ (code units) and IPOLE (physical units) are cross-checked with `Xia et al. (2025)`.
+    
 
-##### 第二步：激波探测 (状态：已初步完善)
+---
 
-###### 任务: 
-在三维GRMHD数据中，精确地识别出激波的位置，并准确地获得激波的性质
+## 4. File Structure Shortcuts
 
-###### 挑战与解决方案:
-最初采用的、基于第一篇论文的简化版牛顿算法（只检查径向）无法捕捉到与坐标轴不平行的真实激波结构。我们采用了结合了Lovely & Haimes (1999) 的法向马赫数判据和第一篇论文的熵增条件，实现了“先粗筛，后精选”的探测流程，开发了经典框架下的激波探测函数，后续考虑了磁压力将其推广到了MHD情况。
-
-##### 第三步：非热电子计算 (状态：已初步完善)
-###### 任务: 
-在已识别的激波位置，根据激波性质的计算结果，计算非热电子的能谱参数（归一化常数C和谱指数q）。
-###### 解决方案:
-采用Xia et al. (2025)论文及附录中的公式进行计算。
-###### 问题
-激波产生的辐射非常局域，这是由于我们没有考虑扩散。我们采用伪时间弛豫的方法，考虑**注入（Injection）、平流（Advection）与冷却（Cooling)** 三者的竞争，暂时不考虑使用计算成本高的PIC 或拉格朗日粒子追踪模拟，我们采用稳态平流-冷却近似”(Steady-State Advection-Cooling Approximation)。相关资源为`advection_v0.py`
-
-##### 第四步：生成IPOLE输入文件 (状态：ipole输入文件的格式存在问题)
-###### 任务:
-将我们计算出的所有物理量（流体、磁场、非热电子分布等）打包成一个IPOLE可以读取的HDF5文件。
-
-###### 挑战与解决方案:
-如何将我们的激波mask和其上的谱指数p（p=q-1）与归一化常数C的信息传递给IPOLE？
-我们发现ipole里并没有预留归一化常数C的接口。通过改造ipole中非热电子计算的非热电子能量密度接口，覆写它的计算逻辑，我们把通过非热电子谱算出来的非热电子密度代入进去。我们改造ipole得到了ipole-DSA，适用于我们的情况。
-
-###### 问题
-ipole输入文件的格式不对。即使将原始.athdf文件直接传入ipole也无法复现出100$\rm{\mu as}$尺度之下黑洞事件视界阴影的精细结构。怀疑是ipole的输入文件格式iharm3d和Athena++的输出格式的坐标系转换的问题。通过将Athena++输出的KS坐标转化为ipole支持的mKS坐标，该问题得到了解决。
-
-
-##### 第五步：运行IPOLE进行辐射转移计算 (状态：由于步骤四的问题，目前不能生成正确的辐射图像)
-
-###### 任务: 
-使用编译好的ipole可执行程序，读取我们生成的.h5文件，进行辐射转移计算，得到最终的合成射电图像。
-
-| **实验组**      | **IPOLE 运行模式** | **电子分布模型 (Distribution)** | **非热电子归一化 (Norm)** | **物理意义**                                |
-| ------------ | -------------- | ------------------------- | ------------------ | --------------------------------------- |
-| **A: 纯热背景组** | 原版 IPOLE       | `E_THERMAL`               | 无非热电子              | 模拟吸积盘和喷流中热等离子体的基础辐射。                    |
-| **B: 磁重联模型** | 原版 IPOLE       | `E_POWERLAW`              | 基于磁场能量均分 ($B^2$)   | 假设非热电子能量密度是磁压的固定比例                      |
-| **C: 激波加速组** | ** IPOLE-DSA** | 混合模型 (由 `KEL` 判定)         | **基于激波马赫数 ($C$)**  | 验证 **Xia 等 (2025)** 的观点：非热辐射高度定域在激波前端 。 |
+- **Pipeline Logic**: `workflowFull_v2.py`
+    
+- **$\sigma$-Suppression Logic**: `nt_electron_v1.py` & `advection_v0.py`
+    
+- **IPOLE Input Gen**: `compare_models_v0.py` (HDF5 structure)
+    
+- **External**: `pyathena` (for reading `.athdf`)

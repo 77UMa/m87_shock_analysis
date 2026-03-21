@@ -1,0 +1,8 @@
+# .claudeignore
+ # 暂时完全屏蔽，减少 Hashing 负担
+
+# 屏蔽编译中间产物
+__pycache__/
+build/
+dist/
+literature_review_highsigma_shock_DSA_20260320.md
