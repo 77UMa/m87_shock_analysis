@@ -264,6 +264,15 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config):
         f.create_dataset('UNTH', data=c_grid.transpose(2, 1, 0).astype('f8')) # 非热电子数密度/归一化常数
         f.create_dataset('p', data=p_grid.transpose(2, 1, 0).astype('f8')) # 谱指数
 
+        # gamma_min：每个激波格网的最小洛伦兹因子，供 ipole-DSA 使用 (Bug 2 修复)
+        if 'gamma_min_grid' in nonthermal_props:
+            f.create_dataset('GAMMA_MIN',
+                             data=nonthermal_props['gamma_min_grid'].transpose(2, 1, 0).astype('f8'))
+        else:
+            # 向后兼容：没有 gamma_min_grid 时写入全局默认值 100
+            f.create_dataset('GAMMA_MIN',
+                             data=np.full(mask.shape, 100.0).transpose(2, 1, 0).astype('f8'))
+
         # 诊断用：写入σ场和σ压低因子（不影响ipole读取）
         if 'sigma_grid' in shock_props:
             f.create_dataset('sigma', data=shock_props['sigma_grid'].transpose(2, 1, 0).astype('f4'))

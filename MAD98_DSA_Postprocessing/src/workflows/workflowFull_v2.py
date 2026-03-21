@@ -56,11 +56,25 @@ def process_snapshot(filename, config, logger=None):
             return False
 
         # Step 2: 计算激波和非热电子物理
-        enable_advection = config.get('physics', {}).get('enable_advection', False)
+        # 从 physics 配置计算 RHO_unit，用于 nt_electron_v1.py 的单位转换
+        physics_cfg = config.get('physics', {})
+        G_CGS    = 6.674e-8
+        M_SUN    = 1.989e33
+        C_LIGHT_CGS = 2.998e10
+        M_unit_val  = physics_cfg.get('M_unit', 1e25)
+        MBH_solar   = physics_cfg.get('MBH_solar', 6.2e9)
+        L_unit_val  = G_CGS * (MBH_solar * M_SUN) / C_LIGHT_CGS**2
+        rho_unit    = M_unit_val / L_unit_val**3
+
+        # 将 rho_unit 注入 nt_params（不修改原始 config）
+        nt_params = dict(config['nt_params'])
+        nt_params['rho_unit'] = rho_unit
+
+        enable_advection = physics_cfg.get('enable_advection', False)
         shock_props, nonthermal_props = calculate_dsa_physics(
             roi_data,
             config["shock_params"],
-            config["nt_params"],
+            nt_params,
         )
 
         # Step 3: 可选 - 执行平流-冷却扩散计算

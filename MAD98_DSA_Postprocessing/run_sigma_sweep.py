@@ -126,6 +126,8 @@ def _base_pipeline_config():
             "enable_advection": True,
             "cooling_factor": 50.0,
             "advection_steps": 2000,
+            "M_unit": 1e25,        # 代码单位质量标度 [g]（用于 RHO_unit 换算）
+            "MBH_solar": 6.2e9,    # M87 黑洞质量 [太阳质量]（用于 L_unit 换算）
         },
         "max_concurrent_tasks": 1,
     }

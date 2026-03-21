@@ -49,7 +49,7 @@ from scipy.special import betainc
 # --------------------------------------------------------------------------
 
 def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, xi_max=0.05,
-                                   sigma_crit=0.1, alpha_sigma=2):
+                                   sigma_crit=0.1, alpha_sigma=2, rho_unit=1.0):
     """
     严格按照 Xia et al. (2025) 附录A 的公式计算非热电子能谱参数。
     注入效率不再是固定值，而是由激波物理动态决定。
@@ -66,6 +66,12 @@ def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, x
         - σ >> σ_crit 时效率被压低（suppression → 0）
         - α ≥ 2 控制过渡陡峭程度
 
+    单位转换说明：
+        shock_v1.py 输出的 downstream_temp 和 downstream_n_e 均为无量纲代码单位：
+          - downstream_temp [code] = (P_code/rho_code) × (mu×M_P/K_B)，缺少 c² 因子
+          - downstream_n_e [code] = rho_code / M_P，缺少 RHO_unit 因子
+        本函数在使用前先做物理单位换算（Bug 1 修复）。
+
     Args:
         shock_properties (dict): find_shocks_in_roi 函数返回的字典。
             若含 'sigma_grid' 键，则启用σ压低；否则跳过。
@@ -74,31 +80,45 @@ def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, x
         xi_max (float): 允许非热电子占总能量增加的最高比例 (论文中为 0.05)。
         sigma_crit (float): 磁化压低临界参数。建议测试范围 0.01–0.1。
         alpha_sigma (int/float): 压低函数的陡峭指数，须 >= 2。
+        rho_unit (float): 密度代码单位 RHO_unit = M_unit/L_unit³ [g/cm³]。
+            默认值 1.0 为向后兼容（但会给出错误量级的结果）。
+            正常运行时应由 workflowFull_v2.py 根据 M_unit 和 MBH_solar 计算并传入。
 
     Returns:
-        dict: 包含 'q_grid'、'C_grid' 和 'sigma_suppression_grid' 的字典。
+        dict: 包含 'q_grid'、'C_grid'、'sigma_suppression_grid' 和 'gamma_min_grid' 的字典。
     """
     print(f"Starting non-thermal electron calculation (Full Physics Model, "
-          f"sigma_crit={sigma_crit}, alpha={alpha_sigma})...")
-    
+          f"sigma_crit={sigma_crit}, alpha={alpha_sigma}, rho_unit={rho_unit:.3e})...")
+
     # --- 步骤 0: 解包输入数据 ---
     mask = shock_properties["mask"]
     M1 = shock_properties["upstream_mach"]
     T2 = shock_properties["downstream_temp"]
     n_e2 = shock_properties["downstream_n_e"]
-    
+
     # 物理常数 (cgs units)
     M_E, C_LIGHT, K_B = 9.1094e-28, 2.9979e10, 1.3806e-16
 
     q_grid = np.zeros_like(mask, dtype=float)
     C_grid = np.zeros_like(mask, dtype=float)
+    gamma_min_grid = np.ones_like(mask, dtype=float)  # 默认 gamma_min=1（非相对论）
     sigma_suppression_grid = np.ones_like(mask, dtype=float)  # 默认无压低
-    
+
     if np.any(mask):
         M1_shocks = M1[mask]
-        T2_shocks = T2[mask]
-        n_e2_shocks = n_e2[mask]
-        
+
+        # --- 单位转换 (Bug 1 修复) ---
+        # shock_v1.py 中 T2_code = (P_code/rho_code)*(mu*M_P/K_B)，
+        # 物理温度 T2_phys = T2_code * c²（因 P_unit/RHO_unit = c²）
+        T2_shocks = T2[mask] * C_LIGHT**2   # [K] 物理温度
+
+        # shock_v1.py 中 ne_code = rho_code/M_P，
+        # 物理数密度 ne_phys = ne_code * RHO_unit [cm⁻³]
+        n_e2_shocks = n_e2[mask] * rho_unit  # [cm⁻³] 物理数密度
+
+        print(f"  Unit conversion applied: T2 median={np.median(T2_shocks):.3e} K, "
+              f"ne median={np.median(n_e2_shocks):.3e} cm⁻³")
+
         # --- 步骤 1: 计算谱指数 q (与之前相同) ---
         # 根据论文公式(A.5)计算压缩比τ
         inv_tau = (gamma - 1.0) / (gamma + 1.0) + (2.0 / (gamma + 1.0)) / M1_shocks**2
@@ -175,10 +195,19 @@ def calculate_nonthermal_electrons(shock_properties, gamma=4.0/3.0, x_inj=3.5, x
 
         C_grid[mask] = N_inj  # 现在 C_grid 存储的是真正的电子密度N_inj
 
+        # --- 步骤 8: 计算最小洛伦兹因子 gamma_min (Bug 2 修复) ---
+        # gamma_min = sqrt(1 + p_min²)，其中 p_min 已由物理温度T2_phys算出
+        # 此值将写入HDF5的GAMMA_MIN字段，供ipole-DSA逐格网格使用
+        gamma_min_at_shocks = np.sqrt(1.0 + p_min**2)
+        gamma_min_grid[mask] = gamma_min_at_shocks
+        print(f"  gamma_min computed from p_min: median={np.median(gamma_min_at_shocks):.2f}, "
+              f"range=[{np.min(gamma_min_at_shocks):.2f}, {np.max(gamma_min_at_shocks):.2f}]")
+
         print("  Final normalization 'C' calculated using full physics model.")
 
     nonthermal_properties = {"q_grid": q_grid, "C_grid": C_grid,
-                             "mask": mask, "sigma_suppression_grid": sigma_suppression_grid}
+                             "mask": mask, "sigma_suppression_grid": sigma_suppression_grid,
+                             "gamma_min_grid": gamma_min_grid}
     return nonthermal_properties
 
 
