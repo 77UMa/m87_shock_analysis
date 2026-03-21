@@ -1,3 +1,3 @@
 [submodule "ipole-DSA"]
 	path = ipole-DSA
-	url = https://github.com/77UMa/ipole.git
+	url = git@github.com:77UMa/ipole.git
