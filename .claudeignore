@@ -1,5 +1,6 @@
 # .claudeignore
  # 暂时完全屏蔽，减少 Hashing 负担
+*.ps1
 
 # 屏蔽编译中间产物
 __pycache__/
