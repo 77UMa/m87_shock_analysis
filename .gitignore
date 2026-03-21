@@ -19,7 +19,8 @@ test.py
 
 *.o
 *.make
-
+model_radiation(old version).c
+model(old version).c
 
 # Python cache and environment files
 __pycache__/
