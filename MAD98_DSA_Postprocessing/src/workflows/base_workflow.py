@@ -260,7 +260,7 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config):
         # DSA 动量谱指数 q = (τ+2)/(τ-1)，对应 Lorentz 因子谱 N(γ) ∝ γ^{-q}。
         # Symphony power_law_p 使用的正是这个 Lorentz 因子谱指数，因此直接使用 q，
         # 不应减 1（否则强激波 q≈2 → p=1，Symphony 的 (p-1) 因子归零导致发射为零）。
-        p_grid = np.where(mask, q_grid, 0.0)
+        p_grid = np.where(mask, q_grid, 3.0)  # 非激波区用安全默认值，避免插值到激波边界时p<1
         
         # 写入数据集 (转置维度 k,j,i -> i,j,k)
         f.create_dataset('KEL', data=mask.transpose(2, 1, 0).astype('f8')) # KEL 通常用作开关
