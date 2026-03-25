@@ -1,0 +1,29 @@
+04:17:38 [INFO] Logging initialized with run_id=run_20260325_041738_pid5301
+04:17:38 [INFO] ============================================================
+04:17:38 [INFO] Start processing mad98.prim.00405
+04:17:38 [INFO] ROI r=[10, 1200], theta=[0.0, 3.14159], phi=[0.0, 6.28319]
+04:17:38 [INFO] Loading data from mad98.prim.00405.athdf
+04:19:30 [TIME] Load ROI data: 111.86s
+04:19:30 [INFO] Calculating shock properties
+04:20:29 [INFO] Shock sigma summary: median=1.200e-02, max=3.012e-01, fraction sigma>0.1=5.5%
+04:20:29 [INFO] Calculating non-thermal electrons
+04:20:30 [TIME] Shock detection + nonthermal electrons: 60.09s
+04:20:31 [RESULT] Shock statistics:
+04:20:31 [RESULT] Shock cell count: 24615
+04:20:31 [RESULT] Shock coverage: 0.02%
+04:20:31 [RESULT] Mach number: mean=2.07, max=6.30, min=1.70
+04:20:31 [RESULT] Sigma at shocks: median=1.200e-02, max=3.012e-01
+04:20:31 [WARNING] Strong sigma suppression region detected: 5.5% of shock cells have sigma > 0.1
+04:20:31 [RESULT] Non-thermal electron statistics:
+04:20:31 [RESULT] Total N_inj: 5.573e+03
+04:20:31 [RESULT] N_inj range: [4.359e-07, 2.829e+00]
+04:20:31 [RESULT] p index: mean=2.74, range=[1.59, 3.35]
+04:20:31 [RESULT] gamma_min mean: 61.45
+04:20:31 [RESULT] Sigma suppression median: 0.986
+04:20:31 [WARNING] Strong sigma suppression: 0.0% of shock cells have suppression < 0.1
+04:20:31 [INFO] Saving HDF5 to mad98.prim.00405_dsa_input.h5
+04:21:09 [TIME] Save HDF5: 38.21s
+04:21:09 [INFO] Finished processing mad98.prim.00405
+04:21:09 [INFO] Output file: mad98.prim.00405_dsa_input.h5
+04:21:09 [TIME] Total runtime: 210.48s
+04:21:09 [INFO] ============================================================

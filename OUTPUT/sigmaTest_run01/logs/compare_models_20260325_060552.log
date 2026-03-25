@@ -1,0 +1,38 @@
+2026-03-25 06:05:52 - CompareModels - INFO - ============================================================
+2026-03-25 06:05:52 - CompareModels - INFO - Compare Models Run Started
+2026-03-25 06:05:52 - CompareModels - INFO -   Input H5            : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA/OUTPUT/ipole_inputs/mad98.prim.00405_dsa_input.h5
+2026-03-25 06:05:52 - CompareModels - INFO -   Metadata Output Dir : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/sigmaTest_run01
+2026-03-25 06:05:52 - CompareModels - INFO -   Large-data Output   : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA/OUTPUT/sigmaTest_run01
+2026-03-25 06:05:52 - CompareModels - INFO -   IPOLE DSA bin       : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/ipole-DSA/ipole
+2026-03-25 06:05:52 - CompareModels - INFO -   IPOLE DSA exists    : True
+2026-03-25 06:05:52 - CompareModels - INFO -   IPOLE DSA executable: True
+2026-03-25 06:05:52 - CompareModels - INFO -   Params              : {'thetacam': 163, 'freqcgs': 86000000000.0, 'M_unit': 1e+25, 'trat_j': 1.0, 'trat_d': 80.0, 'sigma_cut': 5.0, 'fov': 300, 'nx': 300, 'ny': 300}
+2026-03-25 06:05:52 - CompareModels - INFO -   Log file            : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/sigmaTest_run01/logs/compare_models_20260325_060552.log
+2026-03-25 06:05:52 - CompareModels - INFO - ============================================================
+2026-03-25 06:05:52 - CompareModels - INFO - --- Model A: Thermal Only | ipole-DSA + emission_type=1 + KEL zeroed ---
+2026-03-25 06:06:08 - CompareModels - INFO - KEL zeroed in input_thermal.h5
+2026-03-25 06:06:08 - CompareModels - INFO - Starting IPOLE: img_thermal.h5 (emission_type=1)
+2026-03-25 06:16:24 - CompareModels - INFO - Finished IPOLE: img_thermal.h5 (615.8s)
+2026-03-25 06:16:24 - CompareModels - INFO - --- Model B: Reconnection | ipole-DSA + emission_type=3 + KEL zeroed ---
+2026-03-25 06:16:47 - CompareModels - INFO - KEL zeroed in input_reconnection.h5
+2026-03-25 06:16:47 - CompareModels - INFO - Starting IPOLE: img_reconnection.h5 (emission_type=3)
+2026-03-25 06:26:59 - CompareModels - INFO - Finished IPOLE: img_reconnection.h5 (611.2s)
+2026-03-25 06:26:59 - CompareModels - INFO - --- Model C: Shock-DSA | ipole-DSA + default emission + KEL preserved ---
+2026-03-25 06:27:15 - CompareModels - INFO - Starting IPOLE: img_shock.h5 (emission_type=None)
+2026-03-25 06:33:44 - CompareModels - INFO - Finished IPOLE: img_shock.h5 (389.2s)
+2026-03-25 06:33:44 - CompareModels - INFO - ============================================================
+2026-03-25 06:33:44 - CompareModels - INFO - IPOLE Runtime Summary:
+2026-03-25 06:33:44 - CompareModels - INFO -   Model A: 615.8s
+2026-03-25 06:33:44 - CompareModels - INFO -   Model B: 611.2s
+2026-03-25 06:33:44 - CompareModels - INFO -   Model C: 389.2s
+2026-03-25 06:33:44 - CompareModels - INFO -   Total elapsed: 1671.9s
+2026-03-25 06:33:44 - CompareModels - INFO - ============================================================
+2026-03-25 06:33:44 - CompareModels - INFO - FLUX STATISTICS (Jy):
+2026-03-25 06:33:44 - CompareModels - INFO -   Model A (Thermal Only)     : 3.9941
+2026-03-25 06:33:44 - CompareModels - INFO -   Model B (Reconnection/B^2) : 16.3291
+2026-03-25 06:33:44 - CompareModels - INFO -   Model C (Shock-DSA/Ours)   : 4.0167
+2026-03-25 06:33:44 - CompareModels - INFO - Generating comparison plot...
+2026-03-25 06:33:53 - CompareModels - INFO - Plot saved to: /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/sigmaTest_run01/comparison_results_mhd_native_fov300.png
+2026-03-25 06:33:53 - CompareModels - INFO - Metadata results saved to: /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/sigmaTest_run01
+2026-03-25 06:33:53 - CompareModels - INFO - Large HDF5 results saved to: /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA/OUTPUT/sigmaTest_run01
+2026-03-25 06:33:53 - CompareModels - INFO - Log saved to: /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/sigmaTest_run01/logs/compare_models_20260325_060552.log

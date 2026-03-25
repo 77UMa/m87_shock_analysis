@@ -29,11 +29,17 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-ipole_dir = os.path.join(script_dir, '..', 'ipole-master')
+
+# 导入统一路径配置
+sys.path.insert(0, os.path.join(script_dir, 'src'))
+from src.utils.paths import PATHS
+
+# 路径配置（现在使用 paths.py 统一管理）
+ipole_dir = os.path.join(PATHS['base'], 'ipole-master')
 ipole_scripts_path = os.path.join(ipole_dir, 'scripts')
 sys.path.insert(0, ipole_scripts_path)
 
-pyathena_path = os.path.join(script_dir, '..', 'pyathena')
+pyathena_path = os.path.join(PATHS['base'], 'pyathena')
 sys.path.insert(0, pyathena_path)
 
 try:
@@ -41,9 +47,8 @@ try:
     from pyathena import athena_read
     import ipole as ipole_api
     # 从你的科学计算文件中导入函数
-    from shock_v1 import find_shocks_in_roi_mhd,  visualize_shock_projection_dual_range, visualize_shock_3d_interactive_html
-    from nt_electron_v1 import calculate_nonthermal_electrons, plot_diagnostic_histograms, plot_diagnostic_correlations
-    from ipole_input_v0 import create_ipole_input_h5, plot_ipole_output
+    from src.core.shock_v1 import find_shocks_in_roi_mhd,  visualize_shock_projection_dual_range, visualize_shock_3d_interactive_html
+    from src.core.nt_electron_v1 import calculate_nonthermal_electrons, plot_diagnostic_histograms, plot_diagnostic_correlations
 
 except ImportError as e:
     print(f"Fatal Error: Could not import a required module. {e}")
@@ -69,11 +74,11 @@ def analyze_snapshot_full_pipeline(filename, config):
     base_name = os.path.basename(input_athdf_file).replace('.athdf', '')
     
     # --- 定义所有 CPFS 路径 ---
-    dir_full_data = os.path.join(config['output_directory'], 'full_data_checkpoints')
+    dir_full_data = os.path.join(config['data_output_directory'], 'full_data_checkpoints')
     os.makedirs(dir_full_data, exist_ok=True)
     full_data_checkpoint_filename = os.path.join(dir_full_data, f"{base_name}_full_data.npz")
     
-    dir_analysis_checkpoints = os.path.join(config['output_directory'], 'analysis_checkpoints')
+    dir_analysis_checkpoints = os.path.join(config['data_output_directory'], 'analysis_checkpoints')
     os.makedirs(dir_analysis_checkpoints, exist_ok=True)
     analysis_checkpoint_filename = os.path.join(dir_analysis_checkpoints, f"{base_name}_analysis.npz")
     
@@ -83,8 +88,8 @@ def analyze_snapshot_full_pipeline(filename, config):
     dir_diag_plots = os.path.join(config['output_directory'], 'diagnostic_plots')
     os.makedirs(dir_diag_plots, exist_ok=True)
     
-    dir_ipole_inputs = os.path.join(config['output_directory'], 'ipole_inputs') 
-    dir_ipole_outputs = os.path.join(config['output_directory'], 'ipole_outputs')
+    dir_ipole_inputs = os.path.join(config['data_output_directory'], 'ipole_inputs') 
+    dir_ipole_outputs = os.path.join(config['data_output_directory'], 'ipole_outputs')
     dir_final_images = os.path.join(config['output_directory'], 'final_images')
     os.makedirs(dir_ipole_inputs, exist_ok=True)
     os.makedirs(dir_ipole_outputs, exist_ok=True)
@@ -171,6 +176,13 @@ def analyze_snapshot_full_pipeline(filename, config):
     print("  Step B: Finding shocks...")
     shock_properties = find_shocks_in_roi_mhd(roi_data, **config["shock_params"]) 
     
+    gamma = 4.0 / 3.0
+    B2 = (roi_data['Bcc1']**2 + roi_data['Bcc2']**2 + roi_data['Bcc3']**2)
+    uu = roi_data['press'] / (gamma - 1.0)
+    denom = roi_data['rho'] + uu + roi_data['press']
+    sigma_grid = np.where(denom > 0, B2 / (2.0 * denom), 0.0)
+    shock_properties['sigma_grid'] = sigma_grid
+
     # --- 阶段四：非热电子计算 ---
     print("  Step C: Calculating non-thermal electrons...")
     if np.any(shock_properties["mask"]):
@@ -199,64 +211,22 @@ def analyze_snapshot_full_pipeline(filename, config):
     plot_diagnostic_correlations(shock_properties, nonthermal_props, base_name, diag_corr_filename)
     
     return #废止后续功能
-    # --- 阶段六：IPOLE 运行 ---
-    
-    ipole_input_h5 = os.path.join(dir_ipole_inputs, f"{base_name}_ipole_input.h5")
-    ipole_output_h5 = os.path.join(dir_ipole_outputs, f"{base_name}_ipole_image.h5")
-    final_png_name = os.path.join(dir_final_images, f"{base_name}_final_image.png")
-    
-    create_ipole_input_h5(ipole_input_h5, roi_data, shock_properties, nonthermal_props, spin=config['spin'])
 
-    print(f"--- Step F: Running IPOLE via ipole.py API... ---")
-    
-    ipole_args = {key: config['ipole_params'][key] for key in ['thetacam', 'freqcgs', 'M_unit', 'trat_j', 'trat_d', 'sigma_cut', 'fov']}
-    ipole_args['dump'] = ipole_input_h5
-    ipole_args['outfile'] = ipole_output_h5
-    
-    try:
-        start_ipole_time = time.time()
-        ipole_api.run(ipole_args, exe=config['ipole_executable_path'], verbose=1)
-        end_ipole_time = time.time()
-        
-        print(f"  IPOLE execution time: {end_ipole_time - start_ipole_time:.2f} seconds.")
-            
-        if os.path.exists(ipole_output_h5):
-            plot_ipole_output(ipole_output_h5, fov_muas=config['ipole_params']['fov'], output_png_filename=final_png_name)
-        else:
-            print(f"  Error: IPOLE did not produce the expected output file.")
-
-    except Exception as e:
-        print(f"\n  !!! IPOLE EXECUTION FAILED: {e} !!!\n")
-        import traceback
-        traceback.print_exc()
-        
-    finally:
-        if config['auto_cleanup'] and os.path.exists(ipole_input_h5):
-            print(f"--- Cleaning up intermediate file: {os.path.basename(ipole_input_h5)} ---")
-            os.remove(ipole_input_h5)
-            print("  Cleanup complete.")
-
-    print(f"--- Analysis complete for {base_name}. ---")
-    print("==============================================================================\n")
-    return
 
 
 # ==============================================================================
-# 主程序入口 (已更新为 CPFS 路径和新 Config 结构)
+# 主程序入口 (使用新的统一路径系统)
 # ==============================================================================
 if __name__ == '__main__':
-    
-    # [已更新] CPFS 路径
-    CPFS_ROOT_PATH = "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238"
-    # [保持不变] Home 路径 (用于代码和可执行文件)
-    HOME_PATH = "/home/cyh_22307110238/project/Shockwave"
-
+    # 导入路径配置
+    from src.utils.paths import PATHS
 
     config = {
-        # --- 路径配置 ---
-        "data_directory": os.path.join(CPFS_ROOT_PATH, "data_test3/"), 
-        "output_directory": os.path.join(CPFS_ROOT_PATH, "workflow_output_DSA_run03/"), # 建议为新运行设置新输出目录
-        "ipole_executable_path": os.path.join(HOME_PATH, "ipole-DSA/ipole"),
+        # --- 路径配置 (现在使用 paths.py) ---
+        "data_directory": PATHS['data'],
+        "output_directory": os.path.join(PATHS['output'], "workflow_output_DSA_run04/"),
+        "data_output_directory": os.path.join(PATHS['data_output'], "workflow_output_DSA_run04/"),
+        "ipole_executable_path": PATHS['ipole_dsa'],
         
         # --- 工作流控制 ---
         "save_full_data_checkpoint": False, #老旧功能，数据检查点
@@ -319,7 +289,8 @@ if __name__ == '__main__':
         sys.exit(1)
 
     print(f"Found {len(file_list)} files to process.")
-    print(f"Output will be saved to: {config['output_directory']}")
+    print(f"Metadata output will be saved to: {config['output_directory']}")
+    print(f"Large-data output will be saved to: {config['data_output_directory']}")
     
     # 使用 partial 来固定 config 参数
     task_func = partial(analyze_snapshot_full_pipeline, config=config)

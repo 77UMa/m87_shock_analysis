@@ -1,0 +1,47 @@
+{
+  "run_id": "run_20260325_041738_pid5302",
+  "timestamp": "2026-03-25T04:17:38.882686",
+  "git": {
+    "commit": "unknown",
+    "branch": "unknown",
+    "dirty_files": []
+  },
+  "config": {
+    "output_directory": "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT",
+    "data_directory": "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA/DATA",
+    "ipole_executable_path": "/path/to/ipole-master/ipole",
+    "roi_params": {
+      "r_min": 10,
+      "r_max": 1200,
+      "theta_min": 0.0,
+      "theta_max": 3.14159,
+      "phi_min": 0.0,
+      "phi_max": 6.28319
+    },
+    "shock_params": {
+      "gamma": 1.3333333333333333,
+      "mach_threshold_loose": 1.05,
+      "min_physical_mach": 1.7,
+      "grad_p_filter_quantile": 0.2,
+      "march_cells": 6
+    },
+    "nt_params": {
+      "gamma": 1.3333333333333333,
+      "x_inj": 3.5,
+      "xi_max": 0.05,
+      "sigma_crit": 0.1,
+      "alpha_sigma": 2
+    },
+    "physics": {
+      "spin": 0.98,
+      "hslope": 1.0,
+      "R0": 0.0,
+      "enable_advection": false,
+      "cooling_factor": 50.0,
+      "advection_steps": 2000,
+      "M_unit": 1e+25,
+      "MBH_solar": 6200000000.0
+    },
+    "max_concurrent_tasks": 5
+  }
+}

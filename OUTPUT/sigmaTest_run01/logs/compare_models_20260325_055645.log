@@ -1,0 +1,14 @@
+2026-03-25 05:56:45 - CompareModels - INFO - ============================================================
+2026-03-25 05:56:45 - CompareModels - INFO - Compare Models Run Started
+2026-03-25 05:56:45 - CompareModels - INFO -   Input H5            : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA/OUTPUT/ipole_inputs/mad98.prim.00405_dsa_input.h5
+2026-03-25 05:56:45 - CompareModels - INFO -   Metadata Output Dir : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/sigmaTest_run01
+2026-03-25 05:56:45 - CompareModels - INFO -   Large-data Output   : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA/OUTPUT/sigmaTest_run01
+2026-03-25 05:56:45 - CompareModels - INFO -   IPOLE DSA bin       : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/ipole-DSA/ipole
+2026-03-25 05:56:45 - CompareModels - INFO -   IPOLE DSA exists    : True
+2026-03-25 05:56:45 - CompareModels - INFO -   IPOLE DSA executable: True
+2026-03-25 05:56:45 - CompareModels - INFO -   Params              : {'thetacam': 163, 'freqcgs': 86000000000.0, 'M_unit': 1e+25, 'trat_j': 1.0, 'trat_d': 80.0, 'sigma_cut': 5.0, 'fov': 300, 'nx': 300, 'ny': 300}
+2026-03-25 05:56:45 - CompareModels - INFO -   Log file            : /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/sigmaTest_run01/logs/compare_models_20260325_055645.log
+2026-03-25 05:56:45 - CompareModels - INFO - ============================================================
+2026-03-25 05:56:45 - CompareModels - INFO - --- Model A: Thermal Only | ipole-DSA + emission_type=1 + KEL zeroed ---
+2026-03-25 05:57:06 - CompareModels - INFO - KEL zeroed in input_thermal.h5
+2026-03-25 05:57:06 - CompareModels - INFO - Starting IPOLE: img_thermal.h5 (emission_type=1)

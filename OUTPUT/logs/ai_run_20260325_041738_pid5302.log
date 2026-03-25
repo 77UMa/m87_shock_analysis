@@ -1,0 +1,56 @@
+2026-03-25 04:17:38 [DEBUG] debug:225 - DUALogger initialized with run_id=run_20260325_041738_pid5302
+2026-03-25 04:17:38 [DEBUG] debug:225 - ENTER process_snapshot | args={'filename': 'mad98.prim.00415'}
+2026-03-25 04:17:38 [DEBUG] debug:225 - CONFIG_SNAPSHOT {"data_directory": "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA/DATA", "ipole_executable_path": "/path/to/ipole-master/ipole", "max_concurrent_tasks": 5, "nt_params": {"alpha_sigma": 2, "gamma": 1.3333333333333333, "sigma_crit": 0.1, "x_inj": 3.5, "xi_max": 0.05}, "output_directory": "/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT", "physics": {"MBH_solar": 6200000000.0, "M_unit": 1e+25, "R0": 0.0, "advection_steps": 2000, "cooling_factor": 50.0, "enable_advection": false, "hslope": 1.0, "spin": 0.98}, "roi_params": {"phi_max": 6.28319, "phi_min": 0.0, "r_max": 1200, "r_min": 10, "theta_max": 3.14159, "theta_min": 0.0}, "shock_params": {"gamma": 1.3333333333333333, "grad_p_filter_quantile": 0.2, "mach_threshold_loose": 1.05, "march_cells": 6, "min_physical_mach": 1.7}}
+2026-03-25 04:17:38 [DEBUG] debug:225 - Config snapshot saved to /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/logs/configs/run_20260325_041738_pid5302.json
+2026-03-25 04:17:38 [CODEPATH] codepath:251 - Step 1 | load_and_slice_data
+2026-03-25 04:17:38 [DEBUG] debug:225 - ENTER load_and_slice_data | args={'filename': 'mad98.prim.00415.athdf', 'roi_params': {'r_min': 10, 'r_max': 1200, 'theta_min': 0.0, 'theta_max': 3.14159, 'phi_min': 0.0, 'phi_max': 6.28319}}
+2026-03-25 04:19:23 [CODEPATH] codepath:251 - ROI slice indices | i=[445, 1409), j=[0, 512), k=[0, 257)
+2026-03-25 04:19:24 [DATA] data:247 - roi_data.rho: shape=(256, 512, 963), dtype=float64, range=[1.000e-06, 1.510e+01], median=8.118e-03
+2026-03-25 04:19:25 [DATA] data:247 - roi_data.press: shape=(256, 512, 963), dtype=float64, range=[1.000e-08, 9.830e-02], median=8.247e-05
+2026-03-25 04:19:26 [DATA] data:247 - roi_data.vel1: shape=(256, 512, 963), dtype=float64, range=[-3.459e+00, 8.719e+00], median=1.004e-01
+2026-03-25 04:19:27 [DATA] data:247 - roi_data.Bcc1: shape=(256, 512, 963), dtype=float64, range=[-5.102e-01, 4.867e-01], median=3.448e-10
+2026-03-25 04:19:27 [DATA] data:247 - roi_data.x1v [r_g]: shape=(963,), dtype=float64, range=[1.006e+01, 1.197e+03], median=1.097e+02
+2026-03-25 04:19:27 [DATA] data:247 - roi_data.x2v [rad]: shape=(512,), dtype=float64, range=[3.068e-03, 3.139e+00], median=1.571e+00
+2026-03-25 04:19:27 [DATA] data:247 - roi_data.x3v [rad]: shape=(256,), dtype=float64, range=[1.227e-02, 6.271e+00], median=3.142e+00
+2026-03-25 04:19:27 [DEBUG] debug:225 - EXIT load_and_slice_data | result={'keys': ['Bcc1', 'Bcc2', 'Bcc3', 'Time', 'press', 'rho', 'vel1', 'vel2'], 'rho_shape': [256, 512, 963], 'time': 0.0}
+2026-03-25 04:19:27 [DATA] data:247 - roi_data.shape: {'rho': [256, 512, 963]}
+2026-03-25 04:19:27 [CODEPATH] codepath:251 - Step 2 | calculate_dsa_physics
+2026-03-25 04:19:27 [DEBUG] debug:225 - Derived units: L_unit=9.157e+14, rho_unit=1.302e-20
+2026-03-25 04:19:27 [CODEPATH] codepath:251 - Physics branch | enable_advection=False
+2026-03-25 04:19:27 [DEBUG] debug:225 - ENTER calculate_dsa_physics | args={'shock_params': {'gamma': 1.3333333333333333, 'mach_threshold_loose': 1.05, 'min_physical_mach': 1.7, 'grad_p_filter_quantile': 0.2, 'march_cells': 6}, 'nt_params': {'gamma': 1.3333333333333333, 'x_inj': 3.5, 'xi_max': 0.05, 'sigma_crit': 0.1, 'alpha_sigma': 2, 'rho_unit': 1.3024220681075788e-20}, 'rho_shape': [256, 512, 963]}
+2026-03-25 04:19:27 [DEBUG] debug:225 - ENTER find_shocks_in_roi_mhd | args={'gamma': 1.3333333333333333, 'mach_threshold_loose': 1.05, 'min_physical_mach': 1.7, 'grad_p_filter_quantile': 0.2, 'march_cells': 6, 'rho_shape': [256, 512, 963]}
+2026-03-25 04:19:41 [DATA] data:247 - shock.p_tot: shape=(256, 512, 963), dtype=float64, range=[1.000e-08, 1.565e-01], median=2.017e-04
+2026-03-25 04:19:42 [DATA] data:247 - shock.v_fast: shape=(256, 512, 963), dtype=float64, range=[1.138e-02, 1.214e+01], median=9.185e-02
+2026-03-25 04:19:43 [DATA] data:247 - shock.grad_P_mag: shape=(256, 512, 963), dtype=float64, range=[1.000e-30, 3.002e+00], median=3.991e-08
+2026-03-25 04:19:43 [DEBUG] debug:225 - Shock candidate count=1441096
+2026-03-25 04:20:10 [DEBUG] debug:225 - Verified shock cells=18224
+2026-03-25 04:20:10 [DATA] data:247 - shock.upstream_mach.active: shape=(18224,), dtype=float64, range=[1.700e+00, 7.012e+00], median=1.918e+00
+2026-03-25 04:20:10 [CODEPATH] codepath:251 - Shock detection branch | verified shock cells present, candidate count=1441096
+2026-03-25 04:20:12 [DEBUG] debug:225 - EXIT find_shocks_in_roi_mhd | result={'verified_cells': 18224, 'result_keys': ['downstream_n_e', 'downstream_temp', 'grad_p_mag', 'mask', 'upstream_mach']}
+2026-03-25 04:20:18 [DATA] data:247 - shock_props.sigma_grid: shape=(256, 512, 963), dtype=float64, range=[1.415e-14, 6.213e+01], median=4.137e-04
+2026-03-25 04:20:19 [DEBUG] debug:225 - ENTER calculate_nonthermal_electrons | args={'gamma': 1.3333333333333333, 'x_inj': 3.5, 'xi_max': 0.05, 'sigma_crit': 0.1, 'alpha_sigma': 2, 'rho_unit': 1.3024220681075788e-20, 'shock_cells': 18224}
+2026-03-25 04:20:20 [DATA] data:247 - nt.T2_shocks [K]: shape=(18224,), dtype=float64, range=[1.061e+10, 1.899e+13], median=1.213e+12
+2026-03-25 04:20:20 [DATA] data:247 - nt.n_e2_shocks [cm^-3]: shape=(18224,), dtype=float64, range=[7.787e-03, 7.759e+03], median=6.996e-02
+2026-03-25 04:20:20 [DATA] data:247 - nt.q: shape=(18224,), dtype=float64, range=[1.573e+00, 3.352e+00], median=2.806e+00
+2026-03-25 04:20:20 [DATA] data:247 - nt.eta_lin: shape=(18224,), dtype=float64, range=[1.969e-04, 8.085e-04], median=2.564e-04
+2026-03-25 04:20:20 [DATA] data:247 - nt.K_inj: shape=(18224,), dtype=float64, range=[0.000e+00, 2.874e+02], median=1.395e+01
+2026-03-25 04:20:20 [CODEPATH] codepath:251 - Sigma suppression branch | sigma_grid found and applied
+2026-03-25 04:20:20 [DATA] data:247 - nt.sigma_at_shocks: shape=(18224,), dtype=float64, range=[2.236e-05, 2.890e-01], median=2.576e-02
+2026-03-25 04:20:20 [DATA] data:247 - nt.suppression: shape=(18224,), dtype=float64, range=[1.069e-01, 1.000e+00], median=9.378e-01
+2026-03-25 04:20:20 [DATA] data:247 - nt.N_inj: shape=(18224,), dtype=float64, range=[7.694e-07, 2.142e+00], median=1.481e-05
+2026-03-25 04:20:20 [DATA] data:247 - nt.gamma_min: shape=(18224,), dtype=float64, range=[6.697e+00, 2.801e+02], median=7.081e+01
+2026-03-25 04:20:20 [DEBUG] debug:225 - EXIT calculate_nonthermal_electrons | result={'result_keys': ['C_grid', 'gamma_min_grid', 'mask', 'q_grid', 'sigma_suppression_grid'], 'shock_cells': 18224}
+2026-03-25 04:20:20 [DEBUG] debug:225 - EXIT calculate_dsa_physics | result={'shock_cells': 18224, 'nonthermal_keys': ['C_grid', 'gamma_min_grid', 'mask', 'q_grid', 'sigma_suppression_grid']}
+2026-03-25 04:20:21 [DATA] data:247 - shock_props.upstream_mach.active: shape=(18224,), dtype=float64, range=[1.700e+00, 7.012e+00], median=1.918e+00
+2026-03-25 04:20:21 [DATA] data:247 - shock_props.sigma.active: shape=(18224,), dtype=float64, range=[2.236e-05, 2.890e-01], median=2.576e-02
+2026-03-25 04:20:21 [CODEPATH] codepath:251 - Step 3 | advection skipped
+2026-03-25 04:20:21 [DATA] data:247 - nonthermal.C_grid.active: shape=(18224,), dtype=float64, range=[7.694e-07, 2.142e+00], median=1.481e-05
+2026-03-25 04:20:21 [DATA] data:247 - nonthermal.q_grid.active: shape=(18224,), dtype=float64, range=[1.573e+00, 3.352e+00], median=2.806e+00
+2026-03-25 04:20:21 [DATA] data:247 - nonthermal.gamma_min.active: shape=(18224,), dtype=float64, range=[6.697e+00, 2.801e+02], median=7.081e+01
+2026-03-25 04:20:21 [CODEPATH] codepath:251 - Step 4 | save_h5_file
+2026-03-25 04:20:21 [DEBUG] debug:225 - ENTER save_h5_file | args={'output_h5': '/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/ipole_inputs/mad98.prim.00415_dsa_input.h5'}
+2026-03-25 04:20:21 [DATA] data:247 - save.scale_1: shape=(1, 1, 963), dtype=float64, range=[8.354e-04, 9.941e-02], median=9.113e-03
+2026-03-25 04:20:21 [DEBUG] debug:225 - Transformation scales: scale_2=0.3183098861837907, scale_3=1.0
+2026-03-25 04:20:54 [CODEPATH] codepath:251 - HDF5 datasets written | t,dump_cadence,header,prims,KEL,UNTH,p,GAMMA_MIN,sigma,sigma_suppression
+2026-03-25 04:20:54 [DEBUG] debug:225 - EXIT save_h5_file | result={'output_h5': '/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/ipole_inputs/mad98.prim.00415_dsa_input.h5', 'grid_shape': [963, 512, 256]}
+2026-03-25 04:20:54 [DEBUG] debug:225 - EXIT process_snapshot | result={'success': True, 'output_h5': '/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT/ipole_inputs/mad98.prim.00415_dsa_input.h5', 'stage_times': {'load': 108.32061839103699, 'dsa': 53.83337712287903, 'advection': 3.170967102050781e-05, 'save': 33.11222290992737}}

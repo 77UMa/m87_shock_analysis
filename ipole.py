@@ -12,6 +12,21 @@
 
 import subprocess
 
+
+def _run_command(cmd, verbose=0):
+  if verbose > 1:
+    completed = subprocess.run(cmd, check=True, text=True)
+    return completed.stdout.splitlines() if completed.stdout else []
+
+  completed = subprocess.run(
+      cmd,
+      check=True,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.STDOUT,
+      text=True,
+  )
+  return completed.stdout.splitlines() if completed.stdout else []
+
 def run(args, exe="./ipole", quench=False, unpol=False, parfile=None, verbose=0):
   """Runs ipole with config as specified by args."""
 
@@ -25,12 +40,10 @@ def run(args, exe="./ipole", quench=False, unpol=False, parfile=None, verbose=0)
   if unpol: cmd += ["-unpol"]
 
   if verbose>0: print(" ".join(cmd))
-  proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  output = [ z for y in [ str(x)[2:-1].split("\\n") for x in proc.communicate() ] for z in y ]
+  output = _run_command(cmd, verbose=verbose)
 
   results = {}
   for line in output:
-    if verbose>1: print(line)
     if "Ftot" in line:
       proc = line.replace('(','').replace(')','').split()
       results['Ftot_pol'] = float(proc[3])
@@ -51,14 +64,11 @@ def run_legacy(thetacam, freqcgs, Mbh, Munit, fname, Rlow=None, Rhigh=None, exe=
   if quench: args.append("-quench")
   if unpol: args.append("-unpol")
   if verbose: print(args)
-  proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  output = [ z for y in [ str(x)[2:-1].split("\\n") for x in proc.communicate() ] for z in y ]
+  output = _run_command(args, verbose=2 if verbose else 0)
   results = {}
   for line in output:
-    if verbose: print(line)
     if "Ftot" in line:
       proc = line.replace('(','').replace(')','').split()
       results['Ftot_pol'] = float(proc[3])
       results['Ftot_unpol'] = float(proc[4])
   return results
-

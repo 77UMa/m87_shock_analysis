@@ -1,0 +1,14 @@
+2026-03-25 05:04:56 - DSAWorkflow - INFO - Base path: /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing
+2026-03-25 05:04:56 - DSAWorkflow - INFO - Data path: /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA/DATA (exists: True)
+2026-03-25 05:04:56 - DSAWorkflow - INFO - Metadata output path: /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/Projects/MAD98_DSA_Postprocessing/OUTPUT
+2026-03-25 05:04:56 - DSAWorkflow - INFO - Large-data output path: /cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/DSA/OUTPUT
+2026-03-25 05:04:56 - DSAWorkflow - INFO - ipole executable: /path/to/ipole-master/ipole (exists: False)
+2026-03-25 05:04:56 - DSAWorkflow - INFO - Starting pipeline: 5 files, 5 workers
+2026-03-25 05:08:50 - DSAWorkflow - INFO - ============================================================
+2026-03-25 05:08:50 - DSAWorkflow - INFO - Processing summary
+2026-03-25 05:08:50 - DSAWorkflow - INFO - Total files: 5
+2026-03-25 05:08:50 - DSAWorkflow - INFO - Successful files: 5
+2026-03-25 05:08:50 - DSAWorkflow - INFO - Failed files: 0
+2026-03-25 05:08:50 - DSAWorkflow - INFO - Success rate: 100.0%
+2026-03-25 05:08:50 - DSAWorkflow - INFO - Total runtime: 234.73s
+2026-03-25 05:08:50 - DSAWorkflow - INFO - ============================================================
