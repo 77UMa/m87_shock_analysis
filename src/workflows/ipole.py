@@ -13,10 +13,28 @@
 import subprocess
 
 
-def _run_command(cmd, verbose=0):
-  if verbose > 1:
-    completed = subprocess.run(cmd, check=True, text=True)
-    return completed.stdout.splitlines() if completed.stdout else []
+def _run_command(cmd, verbose=0, line_callback=None):
+  if verbose > 1 or line_callback is not None:
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    output = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+      line = line.rstrip("\n")
+      output.append(line)
+      if verbose > 1:
+        print(line, flush=True)
+      if line_callback is not None:
+        line_callback(line)
+    returncode = proc.wait()
+    if returncode != 0:
+      raise subprocess.CalledProcessError(returncode, cmd, output="\n".join(output))
+    return output
 
   completed = subprocess.run(
       cmd,
@@ -27,7 +45,7 @@ def _run_command(cmd, verbose=0):
   )
   return completed.stdout.splitlines() if completed.stdout else []
 
-def run(args, exe="./ipole", quench=False, unpol=False, parfile=None, verbose=0):
+def run(args, exe="./ipole", quench=False, unpol=False, parfile=None, verbose=0, line_callback=None):
   """Runs ipole with config as specified by args."""
 
   cmd = [exe]
@@ -40,7 +58,7 @@ def run(args, exe="./ipole", quench=False, unpol=False, parfile=None, verbose=0)
   if unpol: cmd += ["-unpol"]
 
   if verbose>0: print(" ".join(cmd))
-  output = _run_command(cmd, verbose=verbose)
+  output = _run_command(cmd, verbose=verbose, line_callback=line_callback)
 
   results = {}
   for line in output:
@@ -52,7 +70,7 @@ def run(args, exe="./ipole", quench=False, unpol=False, parfile=None, verbose=0)
   return results
 
 def run_legacy(thetacam, freqcgs, Mbh, Munit, fname, Rlow=None, Rhigh=None, exe="./ipole", counterjet=0, 
-        quench=False, verbose=False, unpol=False):
+        quench=False, verbose=False, unpol=False, line_callback=None):
   """ runs ipole with config as specified by input arguments """
   if Rlow is None and Rhigh is not None: Rlow = 1.
   if Rhigh is None and Rlow is not None: Rhigh = 1.
@@ -64,7 +82,7 @@ def run_legacy(thetacam, freqcgs, Mbh, Munit, fname, Rlow=None, Rhigh=None, exe=
   if quench: args.append("-quench")
   if unpol: args.append("-unpol")
   if verbose: print(args)
-  output = _run_command(args, verbose=2 if verbose else 0)
+  output = _run_command(args, verbose=2 if verbose else 0, line_callback=line_callback)
   results = {}
   for line in output:
     if "Ftot" in line:

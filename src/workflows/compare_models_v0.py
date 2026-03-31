@@ -3,6 +3,7 @@
 import glob
 import logging
 import os
+import shutil
 import sys
 import time
 
@@ -29,11 +30,10 @@ except ImportError as exc:
     sys.exit(1)
 
 
-IPOLE_DSA_BIN = PATHS["ipole_dsa"]
 FOV = 300
 PARAMS = {
     "thetacam": 163,
-    "freqcgs": 86e9,
+    "freqcgs": 230e9,
     "M_unit": 1e25,
     "trat_j": 1.0,
     "trat_d": 80.0,
@@ -50,6 +50,15 @@ def _default_metadata_output() -> str:
 
 def _default_data_output() -> str:
     return os.path.join(PATHS["data_output"], "sigmaTest_run01")
+
+
+def _resolve_scratch_work_dir(scratch_dir=None):
+    if not scratch_dir:
+        return None
+    run_tag = time.strftime("%Y%m%d_%H%M%S")
+    work_dir = os.path.join(scratch_dir, f"compare_models_{run_tag}")
+    os.makedirs(work_dir, exist_ok=True)
+    return work_dir
 
 
 def discover_input_h5(input_h5=None):
@@ -84,8 +93,12 @@ def run_ipole(input_file, output_file, ipole_bin, emission_type=None, logger=Non
     else:
         print(f"\n>>> Running IPOLE: {label}")
 
+    def _log_ipole_line(line):
+        if logger:
+            logger.info(f"[IPOLE] {line}")
+
     start = time.time()
-    ipole_api.run(args, exe=ipole_bin, verbose=2)
+    ipole_api.run(args, exe=ipole_bin, verbose=2, line_callback=_log_ipole_line if logger else None)
     elapsed = time.time() - start
     if logger:
         logger.info(f"Finished IPOLE: {label} ({elapsed:.1f}s)")
@@ -132,8 +145,6 @@ def load_intensity(h5_file, logger=None):
 
 
 def prepare_input(source_h5, target_h5, mode="shock", logger=None):
-    import shutil
-
     os.makedirs(os.path.dirname(target_h5), exist_ok=True)
     shutil.copy2(source_h5, target_h5)
     if mode == "none":
@@ -147,10 +158,27 @@ def prepare_input(source_h5, target_h5, mode="shock", logger=None):
                     print(f"  {msg}")
 
 
+def _copy_artifact_to_output(work_file, output_file, logger=None):
+    if not work_file or not output_file or os.path.abspath(work_file) == os.path.abspath(output_file):
+        return
+    if not os.path.exists(work_file):
+        if logger:
+            logger.warning(f"Scratch artifact missing, cannot copy: {work_file}")
+        return
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    shutil.copy2(work_file, output_file)
+    if logger:
+        logger.info(f"Copied artifact from scratch to data output: {output_file}")
+
+
 def main(args=None):
+    ipole_dsa_bin = getattr(args, "ipole_dsa_bin", None) or PATHS["ipole_dsa"]
     input_h5 = discover_input_h5(getattr(args, "input_h5", None))
     output_dir = getattr(args, "output_dir", None) or _default_metadata_output()
     data_output_dir = getattr(args, "data_output_dir", None) or _default_data_output()
+    scratch_dir = getattr(args, "scratch_dir", None)
+    work_data_dir = _resolve_scratch_work_dir(scratch_dir) or data_output_dir
+    selected_models = list(dict.fromkeys(getattr(args, "models", None) or ["A", "B", "C"]))
 
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(data_output_dir, exist_ok=True)
@@ -167,9 +195,11 @@ def main(args=None):
     logger.info(f"  Input H5            : {input_h5}")
     logger.info(f"  Metadata Output Dir : {output_dir}")
     logger.info(f"  Large-data Output   : {data_output_dir}")
-    logger.info(f"  IPOLE DSA bin       : {IPOLE_DSA_BIN}")
-    logger.info(f"  IPOLE DSA exists    : {os.path.exists(IPOLE_DSA_BIN)}")
-    logger.info(f"  IPOLE DSA executable: {os.access(IPOLE_DSA_BIN, os.X_OK) if os.path.exists(IPOLE_DSA_BIN) else False}")
+    logger.info(f"  Scratch Work Dir    : {work_data_dir if scratch_dir else 'disabled'}")
+    logger.info(f"  Models              : {selected_models}")
+    logger.info(f"  IPOLE DSA bin       : {ipole_dsa_bin}")
+    logger.info(f"  IPOLE DSA exists    : {os.path.exists(ipole_dsa_bin)}")
+    logger.info(f"  IPOLE DSA executable: {os.access(ipole_dsa_bin, os.X_OK) if os.path.exists(ipole_dsa_bin) else False}")
     logger.info(f"  Params              : {PARAMS}")
     logger.info(f"  Log file            : {log_file}")
     logger.info("=" * 60)
@@ -178,43 +208,67 @@ def main(args=None):
         logger.error("No valid input H5 found for compare_models.")
         logger.error("Pass --input-h5 explicitly or ensure *_dsa_input.h5 exists under the data output tree.")
         return
-    if not os.path.exists(IPOLE_DSA_BIN):
-        logger.error(f"ipole-DSA executable not found: {IPOLE_DSA_BIN}")
+    if not os.path.exists(ipole_dsa_bin):
+        logger.error(f"ipole-DSA executable not found: {ipole_dsa_bin}")
         logger.error("Set M87_IPOLE_DSA to a valid ipole-DSA binary before running compare_models.")
         return
 
     start_total = time.time()
-    h5_thermal_in = os.path.join(data_output_dir, "input_thermal.h5")
-    h5_reconn_in = os.path.join(data_output_dir, "input_reconnection.h5")
-    h5_shock_in = os.path.join(data_output_dir, "input_shock.h5")
-    out_thermal = os.path.join(data_output_dir, "img_thermal.h5")
-    out_reconn = os.path.join(data_output_dir, "img_reconnection.h5")
-    out_shock = os.path.join(data_output_dir, "img_shock.h5")
+    h5_thermal_in = os.path.join(work_data_dir, "input_thermal.h5")
+    h5_reconn_in = os.path.join(work_data_dir, "input_reconnection.h5")
+    h5_shock_in = os.path.join(work_data_dir, "input_shock.h5")
+    out_thermal = os.path.join(work_data_dir, "img_thermal.h5")
+    out_reconn = os.path.join(work_data_dir, "img_reconnection.h5")
+    out_shock = os.path.join(work_data_dir, "img_shock.h5")
+    final_out_thermal = os.path.join(data_output_dir, "img_thermal.h5")
+    final_out_reconn = os.path.join(data_output_dir, "img_reconnection.h5")
+    final_out_shock = os.path.join(data_output_dir, "img_shock.h5")
+    final_h5_thermal_in = os.path.join(data_output_dir, "input_thermal.h5")
+    final_h5_reconn_in = os.path.join(data_output_dir, "input_reconnection.h5")
+    final_h5_shock_in = os.path.join(data_output_dir, "input_shock.h5")
     elapsed = {}
 
-    logger.info("--- Model A: Thermal Only | ipole-DSA + emission_type=1 + KEL zeroed ---")
-    try:
-        prepare_input(input_h5, h5_thermal_in, mode="none", logger=logger)
-        elapsed["A"] = run_ipole(h5_thermal_in, out_thermal, IPOLE_DSA_BIN, emission_type=1, logger=logger)
-    except Exception as exc:
-        logger.error(f"Model A failed: {exc}", exc_info=True)
+    if "A" in selected_models:
+        logger.info("--- Model A: Thermal Only | ipole-DSA + emission_type=1 + KEL zeroed ---")
+        try:
+            prepare_input(input_h5, h5_thermal_in, mode="none", logger=logger)
+            _copy_artifact_to_output(h5_thermal_in, final_h5_thermal_in, logger=logger)
+            elapsed["A"] = run_ipole(h5_thermal_in, out_thermal, ipole_dsa_bin, emission_type=1, logger=logger)
+            _copy_artifact_to_output(out_thermal, final_out_thermal, logger=logger)
+        except Exception as exc:
+            logger.error(f"Model A failed: {exc}", exc_info=True)
+            elapsed["A"] = None
+    else:
         elapsed["A"] = None
+        logger.info("--- Model A skipped ---")
 
-    logger.info("--- Model B: Reconnection | ipole-DSA + emission_type=3 + KEL zeroed ---")
-    try:
-        prepare_input(input_h5, h5_reconn_in, mode="none", logger=logger)
-        elapsed["B"] = run_ipole(h5_reconn_in, out_reconn, IPOLE_DSA_BIN, emission_type=3, logger=logger)
-    except Exception as exc:
-        logger.error(f"Model B failed: {exc}", exc_info=True)
+    if "B" in selected_models:
+        logger.info("--- Model B: Reconnection | ipole-DSA + emission_type=3 + KEL zeroed ---")
+        try:
+            prepare_input(input_h5, h5_reconn_in, mode="none", logger=logger)
+            _copy_artifact_to_output(h5_reconn_in, final_h5_reconn_in, logger=logger)
+            elapsed["B"] = run_ipole(h5_reconn_in, out_reconn, ipole_dsa_bin, emission_type=3, logger=logger)
+            _copy_artifact_to_output(out_reconn, final_out_reconn, logger=logger)
+        except Exception as exc:
+            logger.error(f"Model B failed: {exc}", exc_info=True)
+            elapsed["B"] = None
+    else:
         elapsed["B"] = None
+        logger.info("--- Model B skipped ---")
 
-    logger.info("--- Model C: Shock-DSA | ipole-DSA + default emission + KEL preserved ---")
-    try:
-        prepare_input(input_h5, h5_shock_in, mode="shock", logger=logger)
-        elapsed["C"] = run_ipole(h5_shock_in, out_shock, IPOLE_DSA_BIN, emission_type=None, logger=logger)
-    except Exception as exc:
-        logger.error(f"Model C failed: {exc}", exc_info=True)
+    if "C" in selected_models:
+        logger.info("--- Model C: Shock-DSA | ipole-DSA + default emission + KEL preserved ---")
+        try:
+            prepare_input(input_h5, h5_shock_in, mode="shock", logger=logger)
+            _copy_artifact_to_output(h5_shock_in, final_h5_shock_in, logger=logger)
+            elapsed["C"] = run_ipole(h5_shock_in, out_shock, ipole_dsa_bin, emission_type=None, logger=logger)
+            _copy_artifact_to_output(out_shock, final_out_shock, logger=logger)
+        except Exception as exc:
+            logger.error(f"Model C failed: {exc}", exc_info=True)
+            elapsed["C"] = None
+    else:
         elapsed["C"] = None
+        logger.info("--- Model C skipped ---")
 
     logger.info("=" * 60)
     logger.info("IPOLE Runtime Summary:")
@@ -223,13 +277,21 @@ def main(args=None):
     logger.info(f"  Total elapsed: {time.time() - start_total:.1f}s")
     logger.info("=" * 60)
 
-    if all(runtime is None for runtime in elapsed.values()):
-        logger.error("All three compare_models runs failed. Skip plot generation.")
+    if all(model not in selected_models or runtime is None for model, runtime in elapsed.items()):
+        logger.error(f"All requested compare_models runs failed for models={selected_models}. Skip plot generation.")
         return
 
-    img_a, _ = load_intensity(out_thermal, logger=logger)
-    img_b, _ = load_intensity(out_reconn, logger=logger)
-    img_c, _ = load_intensity(out_shock, logger=logger)
+    if selected_models != ["A", "B", "C"]:
+        logger.info(f"Plot generation skipped because a model subset was requested: {selected_models}")
+        return
+
+    load_path_a = final_out_thermal if os.path.exists(final_out_thermal) else out_thermal
+    load_path_b = final_out_reconn if os.path.exists(final_out_reconn) else out_reconn
+    load_path_c = final_out_shock if os.path.exists(final_out_shock) else out_shock
+
+    img_a, _ = load_intensity(load_path_a, logger=logger)
+    img_b, _ = load_intensity(load_path_b, logger=logger)
+    img_c, _ = load_intensity(load_path_c, logger=logger)
 
     logger.info("FLUX STATISTICS (Jy):")
     logger.info(f"  Model A (Thermal Only)     : {np.sum(img_a):.4f}")

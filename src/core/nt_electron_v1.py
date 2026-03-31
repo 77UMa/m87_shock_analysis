@@ -55,11 +55,11 @@ def calculate_nonthermal_electrons(
 
     if np.any(mask):
         m1_shocks = m1[mask]
-        t2_shocks = t2[mask] * c_light**2
-        n_e2_shocks = n_e2[mask] * rho_unit
+        t2_shocks = t2[mask]
+        n_e2_shocks = n_e2[mask]
 
         print(
-            f"  Unit conversion applied: T2 median={np.median(t2_shocks):.3e} K, "
+            f"  Downstream state: T2 median={np.median(t2_shocks):.3e} K, "
             f"ne median={np.median(n_e2_shocks):.3e} cm^-3"
         )
         if logger:

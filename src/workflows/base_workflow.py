@@ -240,14 +240,11 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
         mask = shock_props["mask"]
         c_grid = nonthermal_props.get("C_grid", np.zeros_like(rho))
         q_grid = nonthermal_props.get("q_grid", np.zeros_like(rho))
-        p_grid = np.where(mask, q_grid, 3.0)
+        p_grid = np.where(mask, q_grid - 1.0, 3.0)
 
         handle.create_dataset("KEL", data=mask.transpose(2, 1, 0).astype("f8"))
         handle.create_dataset("UNTH", data=c_grid.transpose(2, 1, 0).astype("f8"))
         handle.create_dataset("p", data=p_grid.transpose(2, 1, 0).astype("f8"))
-
-        gamma_min_grid = nonthermal_props.get("gamma_min_grid", np.full(mask.shape, 100.0))
-        handle.create_dataset("GAMMA_MIN", data=gamma_min_grid.transpose(2, 1, 0).astype("f8"))
 
         if "sigma_grid" in shock_props:
             handle.create_dataset("sigma", data=shock_props["sigma_grid"].transpose(2, 1, 0).astype("f4"))
@@ -260,6 +257,6 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
     if logger:
         logger.ai.codepath(
             "HDF5 datasets written",
-            "t,dump_cadence,header,prims,KEL,UNTH,p,GAMMA_MIN,sigma,sigma_suppression",
+            "t,dump_cadence,header,prims,KEL,UNTH,p,sigma,sigma_suppression",
         )
         logger.ai.func_exit("save_h5_file", {"output_h5": output_h5, "grid_shape": [ni, nj, nk]})

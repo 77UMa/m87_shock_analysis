@@ -195,6 +195,9 @@ def main():
     parser_compare.add_argument("--input-h5", help="Explicit input DSA HDF5 file for comparison")
     parser_compare.add_argument("--output-dir", help="Metadata output directory for compare_models")
     parser_compare.add_argument("--data-output-dir", help="Large-data output directory for compare_models")
+    parser_compare.add_argument("--scratch-dir", help="Optional fast local working directory for temporary compare_models HDF5 files")
+    parser_compare.add_argument("--models", nargs="+", choices=["A", "B", "C"], help="Subset of models to run, e.g. --models A")
+    parser_compare.add_argument("--ipole-dsa-bin", help="Explicit ipole-DSA binary to use for compare_models")
     parser_compare.set_defaults(func=cmd_compare_models)
 
     # analyze_electrons 子命令

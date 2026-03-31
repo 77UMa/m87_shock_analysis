@@ -1,3 +1,7 @@
+项目技术手册可以参阅/docs 其中最重要的文件是不断维护更新中的engineering_guide.md
+主模块（本文件夹）通过Mutagen双向传输对应服务器文件夹/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/
+Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77UMa/m87_shock_analysis ，目前正处于分支 feature/sigma-suppression-methodB 的开发中
+子模块 ./ipole-DSA 对应github项目 https://github.com/77UMa/ipole ，目前也处于分支 feature/sigma-suppression-methodB 的开发中
 # ⚠️ CRITICAL: Token & Performance Policy
 
 ### 1. Think-Before-Acting Protocol (CRITICAL)
@@ -7,7 +11,7 @@
 
 ### 2. Context Awareness & Memory
 - **VERIFY STATE**: 每次任务开始时，先运行 `git log -n 1` 确认当前所处的真实 Git 分支和最后提交时间，严禁产生“虚假提交”或“记混历史”的幻觉。
-- **SUBMODULE POLICY**: 除非明确要求修改 C 代码，否则严禁扫描 `ipole-DSA/` 内部文件。将其视为黑盒调用。
+- **SUBMODULE POLICY**: 除非明确了怀疑对象在ipole的C端，否则严禁扫描 `ipole-DSA/` 内部文件。将其视为黑盒调用。
 
 ### 3. Execution Rules
 - **LOCAL VS REMOTE**: 区分本地开发环境和远程服务器环境。在执行编译（make）或大数据处理前，必须确认当前环境的计算资源。

@@ -15,6 +15,7 @@
 *.sh
 *.tex
 *.md
+*.log
 test.py
 
 
@@ -30,6 +31,12 @@ __pycache__/
 .vscode/
 venv/
 *.egg-info/
+OUTPUT/
+debug_oldversionRef/
+ipole-DSA-main/
+scripts/
+文献/
+
 
 # Large directories (if they contain only data/output)
 full_data_checkpoints/

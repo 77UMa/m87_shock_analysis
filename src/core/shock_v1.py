@@ -194,6 +194,7 @@ def find_shocks_in_roi_mhd(
     min_physical_mach=1.7,
     grad_p_filter_quantile=0.10,
     march_cells=5,
+    rho_unit=1.0,
     logger=None,
 ):
     """
@@ -213,6 +214,7 @@ def find_shocks_in_roi_mhd(
                 "min_physical_mach": min_physical_mach,
                 "grad_p_filter_quantile": grad_p_filter_quantile,
                 "march_cells": march_cells,
+                "rho_unit": rho_unit,
                 "rho_shape": roi_data["rho"].shape,
             },
         )
@@ -286,7 +288,11 @@ def find_shocks_in_roi_mhd(
     # --- 5. 稳健验证 (Gradient Marching) ---
     final_shock_mask = np.zeros_like(press, dtype=bool)
     upstream_mach_grid = np.zeros_like(press)
-    
+    downstream_temp_grid = np.zeros_like(press)
+    downstream_ne_grid = np.zeros_like(press)
+    M_P, K_B = 1.6726e-24, 1.3806e-16
+    mu = 0.5
+
     # 逻辑梯度用于索引回溯
     gk, gj, gi = np.gradient(p_tot)
 
@@ -317,6 +323,8 @@ def find_shocks_in_roi_mhd(
         if m_phys >= min_physical_mach:
             final_shock_mask[k,j,i] = True
             upstream_mach_grid[k,j,i] = m_phys
+            downstream_temp_grid[k,j,i] = (press[kd, jd, id_] * mu * M_P) / (rho[kd, jd, id_] * K_B)
+            downstream_ne_grid[k,j,i] = rho[kd, jd, id_] / M_P
 
     verified_cells = int(np.sum(final_shock_mask))
     print(f"  Verified {verified_cells} MHD shock cells.")
@@ -331,18 +339,11 @@ def find_shocks_in_roi_mhd(
         else:
             logger.ai.codepath("Shock detection branch", "no verified shock cells")
     
-    # 填充返回结构 (保持与 nt_electron 兼容)
-    # 计算下游温度与电子密度 (用于非热电子计算)
-    M_P, K_B = 1.6726e-24, 1.3806e-16
-    mu = 0.5 # 完全电离气体的平均分子量 [cite: 8513]
-    downstream_temp = (press * mu * M_P) / (rho * K_B)
-    downstream_ne = rho / M_P
-
     result = {
         "mask": final_shock_mask,
         "upstream_mach": upstream_mach_grid,
-        "downstream_temp": downstream_temp,
-        "downstream_n_e": downstream_ne,
+        "downstream_temp": downstream_temp_grid,
+        "downstream_n_e": downstream_ne_grid,
         "grad_p_mag": grad_P_mag
     }
     if logger:
