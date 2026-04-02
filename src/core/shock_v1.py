@@ -290,8 +290,610 @@ def find_shocks_in_roi_mhd(
     upstream_mach_grid = np.zeros_like(press)
     downstream_temp_grid = np.zeros_like(press)
     downstream_ne_grid = np.zeros_like(press)
+    rho2_code_grid = np.zeros_like(press)
+    press2_code_grid = np.zeros_like(press)
+    press2_over_rho2_grid = np.zeros_like(press)
+    bsq2_code_grid = np.zeros_like(press)
+    beta2_grid = np.zeros_like(press)
+    sigma2_grid = np.zeros_like(press)
+
+    def _beta_from_press_bsq(local_press, local_bsq):
+        return np.divide(2.0 * local_press, local_bsq, out=np.full((), np.inf, dtype=float), where=local_bsq > 0)
+
+    def _sigma_from_state(local_rho, local_press, local_bsq):
+        local_uu = local_press / (gamma - 1.0)
+        local_denom = local_rho + local_uu + local_press
+        return np.divide(local_bsq, 2.0 * local_denom, out=np.zeros((), dtype=float), where=local_denom > 0)
+
+    mu = 0.5
+    M_P, K_B = 1.6726e-24, 1.3806e-16
+
+    sample_k2_grid = np.full_like(press, -1, dtype=int)
+    sample_j2_grid = np.full_like(press, -1, dtype=int)
+    sample_i2_grid = np.full_like(press, -1, dtype=int)
+    sample_boundary_clipped_grid = np.zeros_like(press, dtype=bool)
+
+    boundary_clip_count = 0
+    accepted_boundary_clip_count = 0
+
+    # 逻辑梯度用于索引回溯
+    gk, gj, gi = np.gradient(p_tot)
+
+    for k, j, i in candidate_indices:
+        dominant_axis = np.argmax([np.abs(gk[k, j, i]), np.abs(gj[k, j, i]), np.abs(gi[k, j, i])])
+
+        dk, dj, di = 0, 0, 0
+        if dominant_axis == 0:
+            dk = -int(np.sign(gk[k, j, i]))
+        elif dominant_axis == 1:
+            dj = -int(np.sign(gj[k, j, i]))
+        else:
+            di = -int(np.sign(gi[k, j, i]))
+
+        ku_raw, ju_raw, iu_raw = k + dk * march_cells, j + dj * march_cells, i + di * march_cells
+        kd_raw, jd_raw, id_raw = k - dk * march_cells, j - dj * march_cells, i - di * march_cells
+        ku, ju, iu = np.clip([ku_raw, ju_raw, iu_raw], 0, [nk - 1, nj - 1, ni - 1])
+        kd, jd, id_ = np.clip([kd_raw, jd_raw, id_raw], 0, [nk - 1, nj - 1, ni - 1])
+        boundary_clipped = (
+            (ku != ku_raw)
+            or (ju != ju_raw)
+            or (iu != iu_raw)
+            or (kd != kd_raw)
+            or (jd != jd_raw)
+            or (id_ != id_raw)
+        )
+        if boundary_clipped:
+            boundary_clip_count += 1
+
+        p1_tot = p_tot[ku, ju, iu]
+        p2_tot = p_tot[kd, jd, id_]
+        if p2_tot <= p1_tot * 1.05:
+            continue
+
+        press_ratio = p2_tot / p1_tot
+        m_phys_sq = 1.0 + (press_ratio - 1.0) * (gamma + 1.0) / (2.0 * gamma)
+        m_phys = np.sqrt(m_phys_sq)
+
+        if m_phys >= min_physical_mach:
+            rho2 = rho[kd, jd, id_]
+            press2 = press[kd, jd, id_]
+            bsq2 = b_sq[kd, jd, id_]
+
+            final_shock_mask[k, j, i] = True
+            upstream_mach_grid[k, j, i] = m_phys
+            downstream_temp_grid[k, j, i] = (press2 * mu * M_P) / (rho2 * K_B)
+            downstream_ne_grid[k, j, i] = rho2 / M_P
+            rho2_code_grid[k, j, i] = rho2
+            press2_code_grid[k, j, i] = press2
+            press2_over_rho2_grid[k, j, i] = np.divide(
+                press2,
+                rho2,
+                out=np.array(0.0, dtype=float),
+                where=rho2 > 0,
+            )
+            bsq2_code_grid[k, j, i] = bsq2
+            beta2_grid[k, j, i] = _beta_from_press_bsq(press2, bsq2)
+            sigma2_grid[k, j, i] = _sigma_from_state(rho2, press2, bsq2)
+            sample_k2_grid[k, j, i] = kd
+            sample_j2_grid[k, j, i] = jd
+            sample_i2_grid[k, j, i] = id_
+            sample_boundary_clipped_grid[k, j, i] = boundary_clipped
+            if boundary_clipped:
+                accepted_boundary_clip_count += 1
+
+    verified_cells = int(np.sum(final_shock_mask))
+    sampling_stats = {
+        "candidate_count": int(len(candidate_indices)),
+        "verified_count": verified_cells,
+        "boundary_clipped_candidate_count": int(boundary_clip_count),
+        "boundary_clipped_verified_count": int(accepted_boundary_clip_count),
+    }
+    print(f"  Verified {verified_cells} MHD shock cells.")
+    print(
+        "  Downstream sampling diagnostics: "
+        f"candidate_clipped={boundary_clip_count}, accepted_clipped={accepted_boundary_clip_count}"
+    )
+    if logger:
+        logger.ai.debug(f"Verified shock cells={verified_cells}")
+        logger.ai.debug(f"Sampling diagnostics={sampling_stats}")
+        if verified_cells > 0:
+            logger.ai.data("shock.upstream_mach.active", upstream_mach_grid[final_shock_mask])
+            logger.ai.data("shock.rho2_code.active", rho2_code_grid[final_shock_mask])
+            logger.ai.data("shock.press2_code.active", press2_code_grid[final_shock_mask])
+            logger.ai.data("shock.bsq2_code.active", bsq2_code_grid[final_shock_mask])
+            logger.ai.data("shock.beta2.active", beta2_grid[final_shock_mask])
+            logger.ai.data("shock.sigma2.active", sigma2_grid[final_shock_mask])
+            logger.ai.codepath(
+                "Shock detection branch",
+                f"verified shock cells present, candidate count={len(candidate_indices)}",
+            )
+        else:
+            logger.ai.codepath("Shock detection branch", "no verified shock cells")
+
+    result = {
+        "mask": final_shock_mask,
+        "upstream_mach": upstream_mach_grid,
+        "downstream_temp": downstream_temp_grid,
+        "downstream_n_e": downstream_ne_grid,
+        "rho2_code_grid": rho2_code_grid,
+        "press2_code_grid": press2_code_grid,
+        "press2_over_rho2_grid": press2_over_rho2_grid,
+        "bsq2_code_grid": bsq2_code_grid,
+        "beta2_grid": beta2_grid,
+        "sigma2_grid": sigma2_grid,
+        "sample_k2_grid": sample_k2_grid,
+        "sample_j2_grid": sample_j2_grid,
+        "sample_i2_grid": sample_i2_grid,
+        "sample_boundary_clipped_grid": sample_boundary_clipped_grid,
+        "sampling_stats": sampling_stats,
+        "grad_p_mag": grad_P_mag,
+    }
+    if logger:
+        logger.ai.func_exit(
+            "find_shocks_in_roi_mhd",
+            {"verified_cells": verified_cells, "result_keys": sorted(result.keys())},
+        )
+    return result
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    sample_k2_grid = np.full_like(press, -1, dtype=int)
+    sample_j2_grid = np.full_like(press, -1, dtype=int)
+    sample_i2_grid = np.full_like(press, -1, dtype=int)
+    sample_boundary_clipped_grid = np.zeros_like(press, dtype=bool)
     M_P, K_B = 1.6726e-24, 1.3806e-16
     mu = 0.5
+
+    boundary_clip_count = 0
+    accepted_boundary_clip_count = 0
 
     # 逻辑梯度用于索引回溯
     gk, gj, gi = np.gradient(p_tot)
@@ -306,8 +908,13 @@ def find_shocks_in_roi_mhd(
         else: di = -int(np.sign(gi[k,j,i]))
 
         # 采样上下游 (State 1: Upstream, State 2: Downstream)
-        ku, ju, iu = np.clip([k + dk*march_cells, j + dj*march_cells, i + di*march_cells], 0, [nk-1, nj-1, ni-1])
-        kd, jd, id_ = np.clip([k - dk*march_cells, j - dj*march_cells, i - di*march_cells], 0, [nk-1, nj-1, ni-1])
+        ku_raw, ju_raw, iu_raw = k + dk*march_cells, j + dj*march_cells, i + di*march_cells
+        kd_raw, jd_raw, id_raw = k - dk*march_cells, j - dj*march_cells, i - di*march_cells
+        ku, ju, iu = np.clip([ku_raw, ju_raw, iu_raw], 0, [nk-1, nj-1, ni-1])
+        kd, jd, id_ = np.clip([kd_raw, jd_raw, id_raw], 0, [nk-1, nj-1, ni-1])
+        boundary_clipped = (ku != ku_raw) or (ju != ju_raw) or (iu != iu_raw) or (kd != kd_raw) or (jd != jd_raw) or (id_ != id_raw)
+        if boundary_clipped:
+            boundary_clip_count += 1
 
         p1_tot = p_tot[ku, ju, iu]
         p2_tot = p_tot[kd, jd, id_]
@@ -325,27 +932,66 @@ def find_shocks_in_roi_mhd(
             upstream_mach_grid[k,j,i] = m_phys
             downstream_temp_grid[k,j,i] = (press[kd, jd, id_] * mu * M_P) / (rho[kd, jd, id_] * K_B)
             downstream_ne_grid[k,j,i] = rho[kd, jd, id_] / M_P
+            rho2_code_grid[k, j, i] = rho[kd, jd, id_]
+            press2_code_grid[k, j, i] = press[kd, jd, id_]
+            press2_over_rho2_grid[k, j, i] = np.divide(
+                press[kd, jd, id_],
+                rho[kd, jd, id_],
+                out=np.array(0.0, dtype=float),
+                where=rho[kd, jd, id_] > 0,
+            )
+            sample_k2_grid[k, j, i] = kd
+            sample_j2_grid[k, j, i] = jd
+            sample_i2_grid[k, j, i] = id_
+            sample_boundary_clipped_grid[k, j, i] = boundary_clipped
+            if boundary_clipped:
+                accepted_boundary_clip_count += 1
+
 
     verified_cells = int(np.sum(final_shock_mask))
+    sampling_stats = {
+        "candidate_count": int(len(candidate_indices)),
+        "verified_count": verified_cells,
+        "boundary_clipped_candidate_count": int(boundary_clip_count),
+        "boundary_clipped_verified_count": int(accepted_boundary_clip_count),
+    }
     print(f"  Verified {verified_cells} MHD shock cells.")
+    print(
+        "  Downstream sampling diagnostics: "
+        f"candidate_clipped={boundary_clip_count}, accepted_clipped={accepted_boundary_clip_count}"
+    )
     if logger:
         logger.ai.debug(f"Verified shock cells={verified_cells}")
+        logger.ai.debug(f"Sampling diagnostics={sampling_stats}")
         if verified_cells > 0:
             logger.ai.data("shock.upstream_mach.active", upstream_mach_grid[final_shock_mask])
+            logger.ai.data("shock.rho2_code.active", rho2_code_grid[final_shock_mask])
+            logger.ai.data("shock.press2_code.active", press2_code_grid[final_shock_mask])
             logger.ai.codepath(
                 "Shock detection branch",
                 f"verified shock cells present, candidate count={len(candidate_indices)}",
             )
         else:
             logger.ai.codepath("Shock detection branch", "no verified shock cells")
-    
+
     result = {
         "mask": final_shock_mask,
         "upstream_mach": upstream_mach_grid,
         "downstream_temp": downstream_temp_grid,
         "downstream_n_e": downstream_ne_grid,
-        "grad_p_mag": grad_P_mag
+        "rho2_code_grid": rho2_code_grid,
+        "press2_code_grid": press2_code_grid,
+        "press2_over_rho2_grid": press2_over_rho2_grid,
+        "sample_k2_grid": sample_k2_grid,
+        "sample_j2_grid": sample_j2_grid,
+        "sample_i2_grid": sample_i2_grid,
+        "sample_boundary_clipped_grid": sample_boundary_clipped_grid,
+        "sampling_stats": sampling_stats,
+        "grad_p_mag": grad_P_mag,
     }
+    if "sigma_grid" in roi_data:
+        result["sigma2_grid"] = np.where(final_shock_mask, roi_data["sigma_grid"], 0.0)
+
     if logger:
         logger.ai.func_exit(
             "find_shocks_in_roi_mhd",

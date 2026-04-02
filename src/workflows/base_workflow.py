@@ -119,11 +119,21 @@ def load_and_slice_data(filename, roi_params, logger=None):
 def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
     """Run shock detection and non-thermal electron calculations."""
     _human_info(logger, "Calculating shock properties")
+    nt_params = dict(nt_params)
+    deprecated_temp_fraction = nt_params.pop("electron_temp_fraction", None)
+    nt_params.setdefault("r_low", 1.0)
+    nt_params.setdefault("r_high", 80.0)
+    nt_params.setdefault("beta_crit", 1.0)
     if logger:
         logger.ai.func_enter(
             "calculate_dsa_physics",
             {"shock_params": shock_params, "nt_params": nt_params, "rho_shape": roi_data["rho"].shape},
         )
+        if deprecated_temp_fraction is not None:
+            logger.ai.codepath(
+                "NT parameter migration",
+                "deprecated electron_temp_fraction ignored; using r_low/r_high/beta_crit closure",
+            )
 
     shock_props = find_shocks_in_roi_mhd(roi_data, logger=logger, **shock_params)
 
@@ -133,6 +143,7 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
     denom = roi_data["rho"] + uu + roi_data["press"]
     sigma_grid = np.where(denom > 0, b_sq / (2.0 * denom), 0.0)
     shock_props["sigma_grid"] = sigma_grid
+    shock_props["sigma2_grid"] = np.where(shock_props["mask"], sigma_grid, 0.0)
 
     if logger:
         logger.ai.data("shock_props.sigma_grid", sigma_grid)
@@ -156,7 +167,40 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
             "mask": shock_props["mask"],
             "sigma_suppression_grid": np.ones_like(roi_data["rho"]),
             "gamma_min_grid": np.ones_like(roi_data["rho"]),
+            "gamma_min_grid_physical": np.ones_like(roi_data["rho"]),
+            "gamma_min_failure_code_grid": np.zeros_like(roi_data["rho"], dtype=np.int16),
+            "theta_e_grid": np.zeros_like(roi_data["rho"]),
+            "p_min_physical_grid": np.zeros_like(roi_data["rho"]),
+            "gamma_failure_codes": {
+                "ok": 0,
+                "press2_nonpositive": 1,
+                "rho2_nonpositive": 2,
+                "boundary_clipped": 3,
+                "temperature_invalid": 4,
+                "gamma_min_le_one": 5,
+            },
         }
+
+        shock_defaults = {
+            "rho2_code_grid": np.zeros_like(roi_data["rho"]),
+            "press2_code_grid": np.zeros_like(roi_data["rho"]),
+            "press2_over_rho2_grid": np.zeros_like(roi_data["rho"]),
+            "sample_boundary_clipped_grid": np.zeros_like(roi_data["rho"], dtype=bool),
+            "sample_k2_grid": np.full_like(roi_data["rho"], -1, dtype=int),
+            "sample_j2_grid": np.full_like(roi_data["rho"], -1, dtype=int),
+            "sample_i2_grid": np.full_like(roi_data["rho"], -1, dtype=int),
+            "sampling_stats": {
+                "candidate_count": 0,
+                "verified_count": 0,
+                "boundary_clipped_candidate_count": 0,
+                "boundary_clipped_verified_count": 0,
+            },
+        }
+        for key, value in shock_defaults.items():
+            shock_props.setdefault(key, value)
+
+        if logger:
+            logger.ai.codepath("No shock branch", "initialized split gamma_min diagnostics to defaults")
 
     if logger:
         logger.ai.func_exit(
@@ -240,23 +284,107 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
         mask = shock_props["mask"]
         c_grid = nonthermal_props.get("C_grid", np.zeros_like(rho))
         q_grid = nonthermal_props.get("q_grid", np.zeros_like(rho))
+        gamma_min_grid = nonthermal_props.get("gamma_min_grid", np.ones_like(rho))
+        gamma_failure_grid = nonthermal_props.get("gamma_min_failure_code_grid", np.zeros_like(rho, dtype=np.int16))
         p_grid = np.where(mask, q_grid - 1.0, 3.0)
+
+        shock_gamma_vals = gamma_min_grid[mask] if np.any(mask) else np.array([])
+        fallback_risk_count = int(np.sum(mask & (gamma_min_grid <= 1.0)))
+        if shock_gamma_vals.size > 0:
+            gamma_stats = {
+                "min": float(np.min(shock_gamma_vals)),
+                "median": float(np.median(shock_gamma_vals)),
+                "max": float(np.max(shock_gamma_vals)),
+                "shock_count": int(shock_gamma_vals.size),
+                "fallback_risk_count": fallback_risk_count,
+                "fallback_risk_fraction": float(fallback_risk_count / shock_gamma_vals.size),
+            }
+        else:
+            gamma_stats = {
+                "min": 1.0,
+                "median": 1.0,
+                "max": 1.0,
+                "shock_count": 0,
+                "fallback_risk_count": 0,
+                "fallback_risk_fraction": 0.0,
+            }
+
+        _human_info(
+            logger,
+            "Pre-HDF5 gamma_min summary: "
+            f"min={gamma_stats['min']:.3e}, median={gamma_stats['median']:.3e}, max={gamma_stats['max']:.3e}, "
+            f"fallback_risk={gamma_stats['fallback_risk_count']}/{gamma_stats['shock_count']}",
+        )
 
         handle.create_dataset("KEL", data=mask.transpose(2, 1, 0).astype("f8"))
         handle.create_dataset("UNTH", data=c_grid.transpose(2, 1, 0).astype("f8"))
         handle.create_dataset("p", data=p_grid.transpose(2, 1, 0).astype("f8"))
+        handle.create_dataset("GAMMA_MIN", data=gamma_min_grid.transpose(2, 1, 0).astype("f8"))
+        handle.create_dataset("GAMMA_MIN_FAILURE_CODE", data=gamma_failure_grid.transpose(2, 1, 0).astype("i2"))
 
         if "sigma_grid" in shock_props:
             handle.create_dataset("sigma", data=shock_props["sigma_grid"].transpose(2, 1, 0).astype("f4"))
+        if "sigma2_grid" in shock_props:
+            handle.create_dataset("sigma2", data=shock_props["sigma2_grid"].transpose(2, 1, 0).astype("f4"))
         if "sigma_suppression_grid" in nonthermal_props:
             handle.create_dataset(
                 "sigma_suppression",
                 data=nonthermal_props["sigma_suppression_grid"].transpose(2, 1, 0).astype("f4"),
             )
+        if "rho2_code_grid" in shock_props:
+            handle.create_dataset("RHO2_CODE", data=shock_props["rho2_code_grid"].transpose(2, 1, 0).astype("f8"))
+        if "press2_code_grid" in shock_props:
+            handle.create_dataset("PRESS2_CODE", data=shock_props["press2_code_grid"].transpose(2, 1, 0).astype("f8"))
+        if "press2_over_rho2_grid" in shock_props:
+            handle.create_dataset(
+                "PRESS2_OVER_RHO2",
+                data=shock_props["press2_over_rho2_grid"].transpose(2, 1, 0).astype("f8"),
+            )
+        if "sample_boundary_clipped_grid" in shock_props:
+            handle.create_dataset(
+                "SAMPLE_BOUNDARY_CLIPPED",
+                data=shock_props["sample_boundary_clipped_grid"].transpose(2, 1, 0).astype("i1"),
+            )
+        if "theta_e_grid" in nonthermal_props:
+            handle.create_dataset("THETA_E", data=nonthermal_props["theta_e_grid"].transpose(2, 1, 0).astype("f8"))
+        if "p_min_physical_grid" in nonthermal_props:
+            handle.create_dataset(
+                "P_MIN_PHYSICAL",
+                data=nonthermal_props["p_min_physical_grid"].transpose(2, 1, 0).astype("f8"),
+            )
+
+        handle.attrs["gamma_min_shock_min"] = gamma_stats["min"]
+        handle.attrs["gamma_min_shock_median"] = gamma_stats["median"]
+        handle.attrs["gamma_min_shock_max"] = gamma_stats["max"]
+        handle.attrs["gamma_min_fallback_risk_count"] = gamma_stats["fallback_risk_count"]
+        handle.attrs["gamma_min_fallback_risk_fraction"] = gamma_stats["fallback_risk_fraction"]
+
+        sampling_stats = shock_props.get("sampling_stats", {})
+        for key, value in sampling_stats.items():
+            handle.attrs[f"shock_sampling_{key}"] = value
+
+        failure_codes = nonthermal_props.get("gamma_failure_codes", {})
+        for name, code in failure_codes.items():
+            handle.attrs[f"gamma_failure_code_{name}"] = code
+
+        if np.any(mask):
+            unique_codes, unique_counts = np.unique(gamma_failure_grid[mask], return_counts=True)
+            for code, count in zip(unique_codes, unique_counts):
+                handle.attrs[f"gamma_failure_count_{int(code)}"] = int(count)
+
+        if logger:
+            logger.ai.data("save.gamma_min.active", shock_gamma_vals if shock_gamma_vals.size else np.array([1.0]))
+            logger.ai.data(
+                "save.gamma_failure_code.active",
+                gamma_failure_grid[mask] if np.any(mask) else np.array([0], dtype=np.int16),
+            )
+            logger.ai.codepath("Gamma-min export", f"fallback risk count={fallback_risk_count}")
 
     if logger:
         logger.ai.codepath(
             "HDF5 datasets written",
-            "t,dump_cadence,header,prims,KEL,UNTH,p,sigma,sigma_suppression",
+            "t,dump_cadence,header,prims,KEL,UNTH,p,GAMMA_MIN,GAMMA_MIN_FAILURE_CODE,sigma,sigma2,sigma_suppression,RHO2_CODE,PRESS2_CODE,PRESS2_OVER_RHO2,SAMPLE_BOUNDARY_CLIPPED,THETA_E,P_MIN_PHYSICAL",
         )
         logger.ai.func_exit("save_h5_file", {"output_h5": output_h5, "grid_shape": [ni, nj, nk]})
+
+    return gamma_stats

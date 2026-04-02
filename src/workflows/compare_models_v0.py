@@ -172,6 +172,7 @@ def _copy_artifact_to_output(work_file, output_file, logger=None):
 
 
 def main(args=None):
+    run_timestamp = time.strftime('%Y%m%d_%H%M%S')
     ipole_dsa_bin = getattr(args, "ipole_dsa_bin", None) or PATHS["ipole_dsa"]
     input_h5 = discover_input_h5(getattr(args, "input_h5", None))
     output_dir = getattr(args, "output_dir", None) or _default_metadata_output()
@@ -186,7 +187,7 @@ def main(args=None):
     logger, log_file = setup_logging(
         log_dir=log_dir,
         log_level=logging.INFO,
-        log_name=f"compare_models_{time.strftime('%Y%m%d_%H%M%S')}.log",
+        log_name=f"compare_models_{run_timestamp}.log",
         logger_name="CompareModels",
     )
 
@@ -332,7 +333,9 @@ def main(args=None):
 
     axes[1, 2].axis("off")
     plt.tight_layout()
-    plot_path = os.path.join(output_dir, f"comparison_results_mhd_native_fov{FOV}.png")
+    plot_dir = os.path.join(output_dir, "plots", f"compare_models_{run_timestamp}")
+    os.makedirs(plot_dir, exist_ok=True)
+    plot_path = os.path.join(plot_dir, f"comparison_results_mhd_native_fov{FOV}.png")
     plt.savefig(plot_path)
     plt.close(fig)
 

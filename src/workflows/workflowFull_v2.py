@@ -71,11 +71,19 @@ def process_snapshot(filename, config, logger=None):
         rho_unit = m_unit_val / l_unit_val**3
 
         nt_params = dict(config["nt_params"])
+        nt_params.pop("electron_temp_fraction", None)
         nt_params["rho_unit"] = rho_unit
+        nt_params["u_unit"] = rho_unit * c_light_cgs**2
+        nt_params.setdefault("r_low", physics_cfg.get("r_low", 1.0))
+        nt_params.setdefault("r_high", physics_cfg.get("r_high", 80.0))
+        nt_params.setdefault("beta_crit", physics_cfg.get("beta_crit", 1.0))
         enable_advection = physics_cfg.get("enable_advection", False)
 
         if dual_logger:
-            dual_logger.ai.debug(f"Derived units: L_unit={l_unit_val:.3e}, rho_unit={rho_unit:.3e}")
+            dual_logger.ai.debug(
+                f"Derived units: L_unit={l_unit_val:.3e}, rho_unit={rho_unit:.3e}, u_unit={nt_params['u_unit']:.3e}, "
+                f"r_low={nt_params['r_low']:.3f}, r_high={nt_params['r_high']:.3f}, beta_crit={nt_params['beta_crit']:.3f}"
+            )
             dual_logger.ai.codepath("Physics branch", f"enable_advection={enable_advection}")
 
         shock_props, nonthermal_props = calculate_dsa_physics(
@@ -147,12 +155,14 @@ def process_snapshot(filename, config, logger=None):
             c_grid = nonthermal_props.get("C_grid", np.array([]))
             q_grid = nonthermal_props.get("q_grid", np.array([]))
             gamma_min_grid = nonthermal_props.get("gamma_min_grid", np.array([]))
+            gamma_failure = nonthermal_props.get("gamma_min_failure_code_grid", np.array([]))
             sigma_suppression = nonthermal_props.get("sigma_suppression_grid")
 
             if np.size(c_grid) > 0:
                 c_vals = c_grid[mask]
                 q_vals = q_grid[mask]
                 gamma_vals = gamma_min_grid[mask] if np.size(gamma_min_grid) > 0 else np.array([1.0])
+                gamma_failure_vals = gamma_failure[mask] if np.size(gamma_failure) > 0 else np.array([], dtype=int)
                 suppression_vals = sigma_suppression[mask] if sigma_suppression is not None else None
 
                 dual_logger.human.log_nonthermal_stats(
@@ -162,9 +172,47 @@ def process_snapshot(filename, config, logger=None):
                     gamma_min_values=gamma_vals,
                     sigma_suppression=suppression_vals,
                 )
+                dual_logger.human.info(
+                    "Branch summary: "
+                    f"UNTH median={np.median(c_vals):.3e}; gamma_min valid={(gamma_failure_vals == 0).sum()}/{gamma_failure_vals.size if gamma_failure_vals.size else 0}; "
+                    f"fallback_risk={(gamma_vals <= 1.0).sum()}"
+                )
                 dual_logger.ai.data("nonthermal.C_grid.active", c_vals)
                 dual_logger.ai.data("nonthermal.q_grid.active", q_vals)
                 dual_logger.ai.data("nonthermal.gamma_min.active", gamma_vals)
+                if gamma_failure_vals.size:
+                    dual_logger.ai.data("nonthermal.gamma_min_failure.active", gamma_failure_vals)
+
+            sampling_stats = shock_props.get("sampling_stats")
+            if sampling_stats:
+                dual_logger.human.info(
+                    "Shock sampling summary: "
+                    f"verified={sampling_stats['verified_count']}, "
+                    f"accepted_boundary_clipped={sampling_stats['boundary_clipped_verified_count']}"
+                )
+
+            sigma2_grid = shock_props.get("sigma2_grid")
+            if sigma2_grid is not None:
+                dual_logger.ai.data("shock.sigma2.active", sigma2_grid[mask])
+
+            p2_over_rho2 = shock_props.get("press2_over_rho2_grid")
+            if p2_over_rho2 is not None:
+                dual_logger.ai.data("shock.press2_over_rho2.active", p2_over_rho2[mask])
+
+            sample_clipped = shock_props.get("sample_boundary_clipped_grid")
+            if sample_clipped is not None:
+                dual_logger.ai.data("shock.sample_boundary_clipped.active", sample_clipped[mask])
+
+            theta_e = nonthermal_props.get("theta_e_grid")
+            if theta_e is not None and np.size(theta_e) > 0:
+                dual_logger.ai.data("nonthermal.theta_e.active", theta_e[mask])
+
+            p_min_phys = nonthermal_props.get("p_min_physical_grid")
+            if p_min_phys is not None and np.size(p_min_phys) > 0:
+                dual_logger.ai.data("nonthermal.p_min_physical.active", p_min_phys[mask])
+
+            dual_logger.ai.codepath("Branch split", "legacy UNTH branch and physical gamma_min branch logged separately")
+
 
         step_start = time.time()
         if dual_logger:

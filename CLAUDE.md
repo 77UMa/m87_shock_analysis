@@ -2,7 +2,8 @@
 主模块（本文件夹）通过Mutagen双向传输对应服务器文件夹/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/
 Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77UMa/m87_shock_analysis ，目前正处于分支 feature/sigma-suppression-methodB 的开发中
 子模块 ./ipole-DSA 对应github项目 https://github.com/77UMa/ipole ，目前也处于分支 feature/sigma-suppression-methodB 的开发中
-# ⚠️ CRITICAL: Token & Performance Policy
+
+# ⚠️ CRITICAL: Performance Policy
 
 ### 1. Think-Before-Acting Protocol (CRITICAL)
 - **NO PROACTIVE SCANNING**: 严禁在未经过用户确认前对整个项目进行大规模 Hashing 或文件读取。
@@ -13,9 +14,11 @@ Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77
 - **VERIFY STATE**: 每次任务开始时，先运行 `git log -n 1` 确认当前所处的真实 Git 分支和最后提交时间，严禁产生“虚假提交”或“记混历史”的幻觉。
 - **SUBMODULE POLICY**: 除非明确了怀疑对象在ipole的C端，否则严禁扫描 `ipole-DSA/` 内部文件。将其视为黑盒调用。
 
+编辑器崩溃预防: 在使用Diff 补丁模式查找长Python文件信息时，编辑器可能会崩溃，插入大段的空行并对程序产生语义污染。当你评估可能发生或者已经发生这种事情的时候，请立即停止并使用简短的语言描述你的整个调整计划。
+
 ### 3. Execution Rules
-- **LOCAL VS REMOTE**: 区分本地开发环境和远程服务器环境。在执行编译（make）或大数据处理前，必须确认当前环境的计算资源。
-- **NO SILENT HANG**: 如果某个内部步骤（如索引）预计超过 30 秒，必须立即告知用户原因，并提供中断选项。
+- **LOCAL VS REMOTE**: 区分本地开发环境和远程服务器环境。
+
 
 # Project Info
 ## 1. Project Context: M87 Jet DSA Model
