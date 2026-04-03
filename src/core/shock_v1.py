@@ -33,176 +33,20 @@ try:
 except ImportError:
     go = None
 # --------------------------------------------------------------------------
-def find_shocks_in_roi_robust(roi_data, gamma=4.0/3.0, 
-                              mach_threshold_loose=1.05, 
-                              min_physical_mach=1.7,
-                              grad_p_filter_quantile=0.20, 
-                              march_cells=4):
-    """
-    【稳健版 v2.0 - 双重阈值与梯度回溯】
-    使用宽松的局地马赫数(mach_threshold_loose)进行初筛，以捕获被涂抹的激波。
-    然后通过梯度回溯(march_cells)采样真实的上下游状态。
-    最后，使用严格的物理马赫数(min_physical_mach)对回溯计算出的M1进行最终验证。
-    """
-    print(f"Starting ROBUST shock detection (Loose M_local >= {mach_threshold_loose}, Strict M_physical >= {min_physical_mach}, March={march_cells})...")
-    
-    # --- 步骤 1: 筛选候选点 (使用宽松阈值) ---
-    press, rho = roi_data['press'], roi_data['rho']
-    nk, nj, ni = press.shape
-    if nk == 0 or nj == 0 or ni == 0:
-        print("  Error: ROI data has zero dimension. Skipping.")
-        return { "mask": np.zeros_like(press, dtype=bool), "upstream_mach": np.zeros_like(press) }
-
-    vel1, vel2, vel3 = roi_data['vel1'], roi_data['vel2'], roi_data['vel3']
-    r_coords = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
-    theta_coords = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
-    phi_coords = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
-    
-    if r_coords.size == 0 or theta_coords.size == 0 or phi_coords.size == 0:
-         print("  Error: Coordinate arrays are empty. Skipping.")
-         return { "mask": np.zeros_like(press, dtype=bool), "upstream_mach": np.zeros_like(press) }
-
-    phi_grid, theta_grid, r_grid = np.meshgrid(phi_coords, theta_coords, r_coords, indexing='ij')
-    
-    print("  Step 1: Screening candidates with local normal Mach number...")
-    sound_speed = np.sqrt(gamma * press / rho)
-    mach_vec_r = vel1 / (sound_speed + 1e-30)
-    mach_vec_theta = vel2 / (sound_speed + 1e-30)
-    mach_vec_phi = vel3 / (sound_speed + 1e-30)
-    
-    grad_P_phi_comp, grad_P_theta_comp, grad_P_r_comp = np.gradient(press, phi_coords, theta_coords, r_coords)
-    grad_P_r = grad_P_r_comp
-    grad_P_theta = (1.0 / (r_grid + 1e-30)) * grad_P_theta_comp
-    grad_P_phi = (1.0 / (r_grid * np.sin(theta_grid) + 1e-30)) * grad_P_phi_comp
-    
-    grad_P_mag = np.sqrt(grad_P_r**2 + grad_P_theta**2 + grad_P_phi**2) + 1e-30
-    dot_product = mach_vec_r * grad_P_r + mach_vec_theta * grad_P_theta + mach_vec_phi * grad_P_phi
-    normal_mach = dot_product / grad_P_mag
-    
-    # 使用宽松的阈值来捕获所有可能的候选点
-    candidate_mask = (normal_mach >= mach_threshold_loose) & (dot_product > 0)
-    
-    if grad_p_filter_quantile > 0 and np.any(grad_P_mag > 0):
-        grad_p_threshold = np.quantile(grad_P_mag[grad_P_mag > 0], grad_p_filter_quantile)
-        candidate_mask &= (grad_P_mag > grad_p_threshold)
-        
-    candidate_indices = np.argwhere(candidate_mask)
-    print(f"  Found {len(candidate_indices)} candidate shock cells for verification.")
-
-    # 步骤 1.5: 计算用于索引回溯的“逻辑”梯度
-    grad_P_k_raw, grad_P_j_raw, grad_P_i_raw = np.gradient(press)
-
-    # --- 步骤 2: 稳健验证 ---
-    print("  Step 2: Verifying candidates and calculating properties via marching...")
-    final_shock_mask = np.zeros_like(press, dtype=bool)
-    upstream_mach_grid = np.zeros_like(press)
-    downstream_temp_grid = np.zeros_like(press)
-    downstream_ne_grid = np.zeros_like(press)
-    shock_grad_p_mag_grid = np.zeros_like(press)
-    
-    M_P, K_B = 1.6726e-24, 1.3806e-16
-
-    for k, j, i in candidate_indices:
-        
-        # 2a. 确定法向向量 (在候选点)
-        n_vec_r = grad_P_r[k,j,i] / grad_P_mag[k,j,i]
-        n_vec_theta = grad_P_theta[k,j,i] / grad_P_mag[k,j,i]
-        n_vec_phi = grad_P_phi[k,j,i] / grad_P_mag[k,j,i]
-        n_vec = np.array([n_vec_r, n_vec_theta, n_vec_phi]) # (r, theta, phi) 物理法向
-
-        # 2b. 确定回溯的网格轴 (主导轴)
-        abs_G_k_raw = np.abs(grad_P_k_raw[k,j,i])
-        abs_G_j_raw = np.abs(grad_P_j_raw[k,j,i])
-        abs_G_i_raw = np.abs(grad_P_i_raw[k,j,i])
-
-        dominant_axis = np.argmax([abs_G_k_raw, abs_G_j_raw, abs_G_i_raw])
-        
-        dk_s, dj_s, di_s = 0, 0, 0
-        if dominant_axis == 0:
-            dk_s = -int(np.sign(grad_P_k_raw[k,j,i]))
-        elif dominant_axis == 1:
-            dj_s = -int(np.sign(grad_P_j_raw[k,j,i]))
-        else:
-            di_s = -int(np.sign(grad_P_i_raw[k,j,i]))
-            
-        if dk_s == 0 and dj_s == 0 and di_s == 0:
-            continue 
-
-        # 2c. 采样上游 (State 1) 和下游 (State 2)
-        ku = np.clip(k + dk_s * march_cells, 0, nk-1)
-        ju = np.clip(j + dj_s * march_cells, 0, nj-1)
-        iu = np.clip(i + di_s * march_cells, 0, ni-1)
-        
-        kd = np.clip(k - dk_s * march_cells, 0, nk-1)
-        jd = np.clip(j - dj_s * march_cells, 0, nj-1)
-        id = np.clip(i - di_s * march_cells, 0, ni-1)
-
-        # 2d. 提取稳健的物理状态
-        P1, rho1 = press[ku,ju,iu], rho[ku,ju,iu]
-        v1_vec = np.array([vel1[ku,ju,iu], vel2[ku,ju,iu], vel3[ku,ju,iu]])
-        a1 = sound_speed[ku,ju,iu]
-
-        P2, rho2 = press[kd,jd,id], rho[kd,jd,id]
-        v2_vec = np.array([vel1[kd,jd,id], vel2[kd,jd,id], vel3[kd,jd,id]])
-        a2 = sound_speed[kd,jd,id]
-
-        # 2e. Rankine-Hugoniot 验证
-        u1 = np.dot(v1_vec, n_vec)
-        u2 = np.dot(v2_vec, n_vec)
-        
-        if u1 <= u2: continue 
-
-        try:
-            pressure_ratio = P2 / P1
-            if pressure_ratio <= 1.0: continue 
-            
-            u_sh = u1 + a1 * np.sqrt(((gamma + 1)/(2*gamma))*pressure_ratio + (gamma - 1)/(2*gamma))
-            
-            if (u1 + a1) < u_sh < (u2 + a2):
-                
-                # 计算物理马赫数 M1
-                mach_1_sq = 1.0 + (pressure_ratio - 1.0) * (gamma + 1.0) / (2.0 * gamma)
-                current_physical_mach = np.sqrt(mach_1_sq)
-
-                # --- 【新增的严格验证】 ---
-                # 只有当计算出的物理马赫数也大于我们的严格阈值时，才接受它
-                if current_physical_mach < min_physical_mach:
-                    continue
-                # --- 【验证结束】 ---
-                
-                final_shock_mask[k,j,i] = True 
-                upstream_mach_grid[k,j,i] = current_physical_mach
-                
-                mu = 0.5 
-                downstream_temp_grid[k,j,i] = (P2 * mu * M_P) / (rho2 * K_B)
-                downstream_ne_grid[k,j,i] = rho2 / M_P
-                shock_grad_p_mag_grid[k,j,i] = grad_P_mag[k,j,i]
-
-        except (ValueError, FloatingPointError):
-            continue 
-
-    print(f"Final Robust detection finished. Verified {np.sum(final_shock_mask)} shock cells.")
-    
-    return {
-        "mask": final_shock_mask,
-        "upstream_mach": upstream_mach_grid,
-        "downstream_temp": downstream_temp_grid,
-        "downstream_n_e": downstream_ne_grid,
-        "grad_p_mag": shock_grad_p_mag_grid
-    }
 
 def find_shocks_in_roi_mhd(
     roi_data,
     gamma=4.0 / 3.0,
-    mach_threshold_loose=1.05,
-    min_physical_mach=1.7,
     grad_p_filter_quantile=0.10,
     march_cells=5,
     rho_unit=1.0,
-    enable_sr_refine=True,
     sr_mach_min=1.2,
     jump_residual_max=0.4,
+    compressibility_gate=True,
+    discontinuity_rel_jump_min=0.05,
+    smeared_sr_mach_min=0.7,
     logger=None,
+    **deprecated_controls,
 ):
     """
     【3D MHD 稳健版激波探测器】
@@ -211,27 +55,38 @@ def find_shocks_in_roi_mhd(
     2. 使用快磁声速 v_fast 作为特征速度 [cite: 7836, 8417]。
     3. 支持球面坐标系下的梯度修正 (r, theta, phi) 。
     """
+    removed_controls = [key for key in ("mach_threshold_loose", "min_physical_mach") if key in deprecated_controls]
+    if removed_controls:
+        raise ValueError(
+            "Removed classical shock controls detected: "
+            + ", ".join(removed_controls)
+            + ". Candidate screening is now SRMHD-mainline only."
+        )
+
     print(
         "Starting 3D MHD shock detection "
-        f"(Loose M_local >= {mach_threshold_loose}, Strict M_physical >= {min_physical_mach}, "
-        f"SR refine={'on' if enable_sr_refine else 'off'})..."
+        f"(three-gate candidate scaffold: compressibility={compressibility_gate}, "
+        f"discontinuity_rel_jump>={discontinuity_rel_jump_min}, "
+        f"smeared_sr_mach>={smeared_sr_mach_min}, "
+        f"sr_mach_min={sr_mach_min}, jump_residual_max={jump_residual_max})..."
     )
     if logger:
         logger.ai.func_enter(
             "find_shocks_in_roi_mhd",
             {
                 "gamma": gamma,
-                "mach_threshold_loose": mach_threshold_loose,
-                "min_physical_mach": min_physical_mach,
-                "grad_p_filter_quantile": grad_p_filter_quantile,
                 "march_cells": march_cells,
                 "rho_unit": rho_unit,
-                "enable_sr_refine": enable_sr_refine,
+                "compressibility_gate": compressibility_gate,
+                "discontinuity_rel_jump_min": discontinuity_rel_jump_min,
+                "smeared_sr_mach_min": smeared_sr_mach_min,
                 "sr_mach_min": sr_mach_min,
                 "jump_residual_max": jump_residual_max,
                 "rho_shape": roi_data["rho"].shape,
             },
         )
+        if deprecated_controls:
+            logger.ai.debug(f"Ignored extra controls={sorted(deprecated_controls.keys())}")
     
     # --- 1. 数据准备 ---
     press = roi_data['press']
@@ -254,7 +109,9 @@ def find_shocks_in_roi_mhd(
     r_coords = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
     theta_coords = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
     phi_coords = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
-    phi_grid, theta_grid, r_grid = np.meshgrid(phi_coords, theta_coords, r_coords, indexing='ij')
+    r_grid = r_coords[np.newaxis, np.newaxis, :]
+    theta_grid = theta_coords[np.newaxis, :, np.newaxis]
+    sin_theta_grid = np.sin(theta_grid)
 
     # --- 2. 计算 MHD 核心物理量 ---
     # a. 计算磁压与总压 [cite: 7836, 8412]
@@ -262,55 +119,122 @@ def find_shocks_in_roi_mhd(
     p_mag = 0.5 * b_sq
     p_tot = press + p_mag
     
-    # b. 计算快磁声速 v_fast [cite: 7836, 8414, 8417]
-    cs_sq = gamma * press / rho
-    va_sq = b_sq / rho
-    v_fast = np.sqrt(cs_sq + va_sq) # 采用垂直近似以获得最大鲁棒性
 
     # --- 3. 计算 3D 梯度 (球面坐标系修正) ---
     # np.gradient 返回顺序对应 (dim0, dim1, dim2) -> (phi, theta, r)
     grad_P_phi_raw, grad_P_theta_raw, grad_P_r_raw = _safe_axis_gradient(p_tot)
-    
-    # 物理距离缩放 
+
+    # 物理距离缩放
     dr = np.gradient(r_coords) if r_coords.size > 1 else np.ones_like(r_coords)
     dtheta = np.gradient(theta_coords) if theta_coords.size > 1 else np.ones_like(theta_coords)
     dphi = np.gradient(phi_coords) if phi_coords.size > 1 else np.ones_like(phi_coords)
-    
+
     # 广播坐标差
-    _, _, dR_grid = np.meshgrid(phi_coords, theta_coords, dr, indexing='ij')
-    _, dT_grid, _ = np.meshgrid(phi_coords, dtheta, r_coords, indexing='ij')
-    dP_grid, _, _ = np.meshgrid(dphi, theta_coords, r_coords, indexing='ij')
+    dR_grid = dr[np.newaxis, np.newaxis, :]
+    dT_grid = dtheta[np.newaxis, :, np.newaxis]
+    dP_grid = dphi[:, np.newaxis, np.newaxis]
 
     grad_P_r = grad_P_r_raw / dR_grid
     grad_P_theta = grad_P_theta_raw / (r_grid * dT_grid + 1e-30)
-    grad_P_phi = grad_P_phi_raw / (r_grid * np.sin(theta_grid) * dP_grid + 1e-30)
-    
+    grad_P_phi = grad_P_phi_raw / (r_grid * sin_theta_grid * dP_grid + 1e-30)
+
     grad_P_mag = np.sqrt(grad_P_r**2 + grad_P_theta**2 + grad_P_phi**2) + 1e-30
 
-    # --- 4. 候选点筛选 (局部法向马赫数) ---
+
+    # --- 4. 三道门候选点筛选 ---
     # 法向量 n = grad(P_tot) / |grad(P_tot)| [cite: 7833]
     n_r, n_theta, n_phi = grad_P_r/grad_P_mag, grad_P_theta/grad_P_mag, grad_P_phi/grad_P_mag
     v_dot_n = vel1 * n_r + vel2 * n_theta + vel3 * n_phi
-    
-    local_mach = v_dot_n / (v_fast + 1e-30)
-    
-    # 初筛条件：马赫数阈值 + 压强梯度阈值 [cite: 7832]
-    candidate_mask = (local_mach >= mach_threshold_loose) & (v_dot_n > 0)
-    if grad_p_filter_quantile > 0:
-        p_threshold = np.quantile(grad_P_mag, grad_p_filter_quantile)
-        candidate_mask &= (grad_P_mag > p_threshold)
-    
+
+    # Gate 1: 汇聚流门槛 (Compressibility Gate)
+
+    # 局部网格尺度 (沿法向的近似)
+    dl_eff = np.abs(n_r * dR_grid + n_theta * r_grid * dT_grid + n_phi * r_grid * sin_theta_grid * dP_grid) + 1e-30
+    # 流体必须顺着压强梯度方向撞向高压
+    compressibility_mask = v_dot_n > 0
+    compressibility_count = int(np.sum(compressibility_mask))
+
+    # Gate 2: 间断强度门槛 (Discontinuity Gate)
+    # 压强梯度跨越网格的相对跳跃 > threshold
+    # relative_jump = |grad_P| * dl_eff / P_tot
+    relative_jump = grad_P_mag * dl_eff / (p_tot + 1e-30)
+    discontinuity_mask = relative_jump >= discontinuity_rel_jump_min
+    discontinuity_count = int(np.sum(discontinuity_mask & compressibility_mask))
+    # Gate 3: ?????? SRMHD ??? (Smeared Local SR-Mach)
+    # ???????????????????????????
+    pre_mach_mask = compressibility_mask & discontinuity_mask
+    local_sr_mach = np.zeros_like(press)
+    if np.any(pre_mach_mask):
+        k_pre, j_pre, i_pre = np.where(pre_mach_mask)
+        r_pre = r_coords[i_pre]
+        sin_theta_pre = np.sin(theta_coords[j_pre])
+        press_pre = press[k_pre, j_pre, i_pre]
+        rho_pre = rho[k_pre, j_pre, i_pre]
+        p_mag_pre = p_mag[k_pre, j_pre, i_pre]
+        b_sq_pre = b_sq[k_pre, j_pre, i_pre]
+        n_r_pre = n_r[k_pre, j_pre, i_pre]
+        n_theta_pre = n_theta[k_pre, j_pre, i_pre]
+        n_phi_pre = n_phi[k_pre, j_pre, i_pre]
+        utilde_n_pre = (
+            vel1[k_pre, j_pre, i_pre] * n_r_pre
+            + (r_pre * vel2[k_pre, j_pre, i_pre]) * n_theta_pre
+            + (r_pre * sin_theta_pre * vel3[k_pre, j_pre, i_pre]) * n_phi_pre
+        )
+        w_local_pre = rho_pre + press_pre / (gamma - 1.0) + press_pre + p_mag_pre
+        cs_sq_local_pre = np.divide(gamma * press_pre, w_local_pre, out=np.zeros_like(press_pre), where=w_local_pre > 0)
+        va_sq_local_pre = np.divide(
+            b_sq_pre,
+            w_local_pre + b_sq_pre,
+            out=np.zeros_like(b_sq_pre),
+            where=(w_local_pre + b_sq_pre) > 0,
+        )
+        b_mag_pre = np.sqrt(b_sq_pre)
+        b_dot_n_pre = (
+            b1[k_pre, j_pre, i_pre] * n_r_pre
+            + b2[k_pre, j_pre, i_pre] * n_theta_pre
+            + b3[k_pre, j_pre, i_pre] * n_phi_pre
+        )
+        cos_theta_bn_pre = np.divide(np.abs(b_dot_n_pre), b_mag_pre, out=np.zeros_like(b_mag_pre), where=b_mag_pre > 0)
+        cos_theta_bn_pre = np.clip(cos_theta_bn_pre, 0.0, 1.0)
+        sin_theta_sq_pre = np.maximum(0.0, 1.0 - cos_theta_bn_pre**2)
+        cfast_sq_local_pre = cs_sq_local_pre + va_sq_local_pre * sin_theta_sq_pre - cs_sq_local_pre * va_sq_local_pre * sin_theta_sq_pre
+        cfast_sq_local_pre = np.clip(cfast_sq_local_pre, 0.0, 1.0 - 1e-12)
+        cfast_local_pre = np.sqrt(cfast_sq_local_pre)
+        u_fast_local_pre = np.divide(cfast_local_pre, np.sqrt(np.maximum(1.0 - cfast_sq_local_pre, 1e-12)))
+        local_sr_mach[pre_mach_mask] = np.divide(np.abs(utilde_n_pre), u_fast_local_pre, out=np.zeros_like(utilde_n_pre), where=u_fast_local_pre > 0)
+    smeared_mach_mask = local_sr_mach >= smeared_sr_mach_min
+    smeared_mach_count = int(np.sum(smeared_mach_mask & pre_mach_mask))
+
+    # 综合三门
+    candidate_mask = compressibility_mask & discontinuity_mask & smeared_mach_mask
+
+    geom_candidate_mask = candidate_mask.copy()
+    geom_candidate_count = int(np.sum(geom_candidate_mask))
+
+    # 打印筛选统计
+    gate_stats = {
+        "compressibility_gate": compressibility_count,
+        "discontinuity_gate": discontinuity_count,
+        "smeared_sr_mach_gate": smeared_mach_count,
+        "final_candidates": geom_candidate_count,
+    }
+    print(f"  Gate 1 (compressibility): {compressibility_count} cells")
+    print(f"  Gate 2 (discontinuity, rel_jump>={discontinuity_rel_jump_min}): {discontinuity_count} cells")
+    print(f"  Gate 3 (smeared SR-Mach>={smeared_sr_mach_min}): {smeared_mach_count} cells")
+    print(f"  Final candidates: {geom_candidate_count} cells")
+    if logger:
+        logger.ai.data("shock.candidate_gate_stats", gate_stats)
+        logger.ai.data("shock.relative_jump", relative_jump)
+        logger.ai.data("shock.local_sr_mach", local_sr_mach)
+
     candidate_indices = np.argwhere(candidate_mask)
     if logger:
         logger.ai.data("shock.p_tot", p_tot)
-        logger.ai.data("shock.v_fast", v_fast)
         logger.ai.data("shock.grad_P_mag", grad_P_mag)
-        logger.ai.debug(f"Shock candidate count={len(candidate_indices)}")
-    print(f"  Found {len(candidate_indices)} candidate cells.")
+        logger.ai.debug(f"Shock candidate marching: {len(candidate_indices)} cells to sample")
 
     # --- 5. 稳健验证 (Gradient Marching) ---
-    final_shock_mask = np.zeros_like(press, dtype=bool)
-    upstream_mach_grid = np.zeros_like(press)
+    mainline_mach_grid = np.zeros_like(press)
     downstream_temp_grid = np.zeros_like(press)
     downstream_ne_grid = np.zeros_like(press)
     rho2_code_grid = np.zeros_like(press)
@@ -319,7 +243,8 @@ def find_shocks_in_roi_mhd(
     bsq2_code_grid = np.zeros_like(press)
     beta2_grid = np.zeros_like(press)
     sigma2_grid = np.zeros_like(press)
-    mask_sr_refined = np.zeros_like(press, dtype=bool)
+    verified_shock_mask = np.zeros_like(press, dtype=bool)
+    refined_shock_mask = np.zeros_like(press, dtype=bool)
     h_rel_upstream_grid = np.zeros_like(press)
     w_rel_upstream_grid = np.zeros_like(press)
     v_n_upstream_grid = np.zeros_like(press)
@@ -358,7 +283,7 @@ def find_shocks_in_roi_mhd(
     sr_accepted_count = 0
 
     # 逻辑梯度用于索引回溯
-    gk, gj, gi = _safe_axis_gradient(p_tot)
+    gk, gj, gi = grad_P_phi_raw, grad_P_theta_raw, grad_P_r_raw
 
     for k, j, i in candidate_indices:
         dominant_axis = np.argmax([np.abs(gk[k, j, i]), np.abs(gj[k, j, i]), np.abs(gi[k, j, i])])
@@ -391,146 +316,143 @@ def find_shocks_in_roi_mhd(
         if p2_tot <= p1_tot * 1.05:
             continue
 
-        press_ratio = p2_tot / p1_tot
-        m_phys_sq = 1.0 + (press_ratio - 1.0) * (gamma + 1.0) / (2.0 * gamma)
-        m_phys = np.sqrt(m_phys_sq)
+        rho2 = rho[kd, jd, id_]
+        press2 = press[kd, jd, id_]
+        bsq2 = b_sq[kd, jd, id_]
 
-        if m_phys >= min_physical_mach:
-            rho2 = rho[kd, jd, id_]
-            press2 = press[kd, jd, id_]
-            bsq2 = b_sq[kd, jd, id_]
+        verified_shock_mask[k, j, i] = True
+        downstream_temp_grid[k, j, i] = (press2 * mu * M_P) / (rho2 * K_B)
+        downstream_ne_grid[k, j, i] = rho2 / M_P
+        rho2_code_grid[k, j, i] = rho2
+        press2_code_grid[k, j, i] = press2
+        press2_over_rho2_grid[k, j, i] = np.divide(
+            press2,
+            rho2,
+            out=np.array(0.0, dtype=float),
+            where=rho2 > 0,
+        )
+        bsq2_code_grid[k, j, i] = bsq2
+        beta2_grid[k, j, i] = _beta_from_press_bsq(press2, bsq2)
+        sigma2_grid[k, j, i] = _sigma_from_state(rho2, press2, bsq2)
+        sample_k2_grid[k, j, i] = kd
+        sample_j2_grid[k, j, i] = jd
+        sample_i2_grid[k, j, i] = id_
+        sample_boundary_clipped_grid[k, j, i] = boundary_clipped
+        if boundary_clipped:
+            accepted_boundary_clip_count += 1
 
-            final_shock_mask[k, j, i] = True
-            upstream_mach_grid[k, j, i] = m_phys
-            downstream_temp_grid[k, j, i] = (press2 * mu * M_P) / (rho2 * K_B)
-            downstream_ne_grid[k, j, i] = rho2 / M_P
-            rho2_code_grid[k, j, i] = rho2
-            press2_code_grid[k, j, i] = press2
-            press2_over_rho2_grid[k, j, i] = np.divide(
-                press2,
-                rho2,
-                out=np.array(0.0, dtype=float),
-                where=rho2 > 0,
-            )
-            bsq2_code_grid[k, j, i] = bsq2
-            beta2_grid[k, j, i] = _beta_from_press_bsq(press2, bsq2)
-            sigma2_grid[k, j, i] = _sigma_from_state(rho2, press2, bsq2)
-            sample_k2_grid[k, j, i] = kd
-            sample_j2_grid[k, j, i] = jd
-            sample_i2_grid[k, j, i] = id_
-            sample_boundary_clipped_grid[k, j, i] = boundary_clipped
-            if boundary_clipped:
-                accepted_boundary_clip_count += 1
+        rho1 = rho[ku, ju, iu]
+        press1 = press[ku, ju, iu]
+        bsq1 = b_sq[ku, ju, iu]
 
-            rho1 = rho[ku, ju, iu]
-            press1 = press[ku, ju, iu]
-            bsq1 = b_sq[ku, ju, iu]
+        local_r = r_coords[i]
+        local_theta = theta_coords[j]
+        sin_theta = np.sin(local_theta)
+        g11 = 1.0
+        g22 = local_r**2
+        g33 = (local_r * sin_theta) ** 2
+        sqrt_g11 = 1.0
+        sqrt_g22 = local_r
+        sqrt_g33 = np.abs(local_r * sin_theta)
 
-            local_r = r_grid[k, j, i]
-            local_theta = theta_grid[k, j, i]
-            sin_theta = np.sin(local_theta)
-            g11 = 1.0
-            g22 = local_r**2
-            g33 = (local_r * sin_theta) ** 2
-            sqrt_g11 = 1.0
-            sqrt_g22 = local_r
-            sqrt_g33 = np.abs(local_r * sin_theta)
+        utilde_sq1 = (
+            g11 * vel1[ku, ju, iu] ** 2
+            + g22 * vel2[ku, ju, iu] ** 2
+            + g33 * vel3[ku, ju, iu] ** 2
+        )
+        utilde_sq2 = (
+            g11 * vel1[kd, jd, id_] ** 2
+            + g22 * vel2[kd, jd, id_] ** 2
+            + g33 * vel3[kd, jd, id_] ** 2
+        )
 
-            utilde_sq1 = (
-                g11 * vel1[ku, ju, iu] ** 2
-                + g22 * vel2[ku, ju, iu] ** 2
-                + g33 * vel3[ku, ju, iu] ** 2
-            )
-            utilde_sq2 = (
-                g11 * vel1[kd, jd, id_] ** 2
-                + g22 * vel2[kd, jd, id_] ** 2
-                + g33 * vel3[kd, jd, id_] ** 2
-            )
+        w1 = rho1 + press1 / (gamma - 1.0) + press1
+        h1 = np.divide(w1, rho1, out=np.zeros((), dtype=float), where=rho1 > 0)
 
-            w1 = rho1 + press1 / (gamma - 1.0) + press1
-            h1 = np.divide(w1, rho1, out=np.zeros((), dtype=float), where=rho1 > 0)
+        utilde_r1 = sqrt_g11 * vel1[ku, ju, iu]
+        utilde_theta1 = sqrt_g22 * vel2[ku, ju, iu]
+        utilde_phi1 = sqrt_g33 * vel3[ku, ju, iu]
+        utilde_r2 = sqrt_g11 * vel1[kd, jd, id_]
+        utilde_theta2 = sqrt_g22 * vel2[kd, jd, id_]
+        utilde_phi2 = sqrt_g33 * vel3[kd, jd, id_]
 
-            utilde_r1 = sqrt_g11 * vel1[ku, ju, iu]
-            utilde_theta1 = sqrt_g22 * vel2[ku, ju, iu]
-            utilde_phi1 = sqrt_g33 * vel3[ku, ju, iu]
-            utilde_r2 = sqrt_g11 * vel1[kd, jd, id_]
-            utilde_theta2 = sqrt_g22 * vel2[kd, jd, id_]
-            utilde_phi2 = sqrt_g33 * vel3[kd, jd, id_]
+        utilde_n1 = (
+            utilde_r1 * n_r[k, j, i]
+            + utilde_theta1 * n_theta[k, j, i]
+            + utilde_phi1 * n_phi[k, j, i]
+        )
+        utilde_n2 = (
+            utilde_r2 * n_r[k, j, i]
+            + utilde_theta2 * n_theta[k, j, i]
+            + utilde_phi2 * n_phi[k, j, i]
+        )
+        gamma_lorentz_1 = np.sqrt(1.0 + utilde_sq1)
+        gamma_lorentz_2 = np.sqrt(1.0 + utilde_sq2)
+        v_n1 = np.divide(utilde_n1, gamma_lorentz_1, out=np.zeros((), dtype=float), where=gamma_lorentz_1 > 0)
+        v_n2 = np.divide(utilde_n2, gamma_lorentz_2, out=np.zeros((), dtype=float), where=gamma_lorentz_2 > 0)
+        u_n1 = utilde_n1
+        u_n2 = utilde_n2
 
-            utilde_n1 = (
-                utilde_r1 * n_r[k, j, i]
-                + utilde_theta1 * n_theta[k, j, i]
-                + utilde_phi1 * n_phi[k, j, i]
-            )
-            utilde_n2 = (
-                utilde_r2 * n_r[k, j, i]
-                + utilde_theta2 * n_theta[k, j, i]
-                + utilde_phi2 * n_phi[k, j, i]
-            )
-            gamma_lorentz_1 = np.sqrt(1.0 + utilde_sq1)
-            gamma_lorentz_2 = np.sqrt(1.0 + utilde_sq2)
-            v_n1 = np.divide(utilde_n1, gamma_lorentz_1, out=np.zeros((), dtype=float), where=gamma_lorentz_1 > 0)
-            v_n2 = np.divide(utilde_n2, gamma_lorentz_2, out=np.zeros((), dtype=float), where=gamma_lorentz_2 > 0)
-            u_n1 = utilde_n1
-            u_n2 = utilde_n2
+        utilde_sq_upstream_grid[k, j, i] = utilde_sq1
+        gamma_lorentz_upstream_grid[k, j, i] = gamma_lorentz_1
+        utilde_n_upstream_grid[k, j, i] = utilde_n1
 
-            utilde_sq_upstream_grid[k, j, i] = utilde_sq1
-            gamma_lorentz_upstream_grid[k, j, i] = gamma_lorentz_1
-            utilde_n_upstream_grid[k, j, i] = utilde_n1
+        cs_sq_sr = np.divide(gamma * press1, w1, out=np.zeros((), dtype=float), where=w1 > 0)
+        va_sq_sr = np.divide(bsq1, w1 + bsq1, out=np.zeros((), dtype=float), where=(w1 + bsq1) > 0)
+        b_mag1 = np.sqrt(bsq1)
+        b_dot_n = b1[ku, ju, iu] * n_r[k, j, i] + b2[ku, ju, iu] * n_theta[k, j, i] + b3[ku, ju, iu] * n_phi[k, j, i]
+        cos_theta_bn = np.divide(np.abs(b_dot_n), b_mag1, out=np.zeros((), dtype=float), where=b_mag1 > 0)
+        cos_theta_bn = np.clip(cos_theta_bn, 0.0, 1.0)
+        sin_theta_sq = np.maximum(0.0, 1.0 - cos_theta_bn**2)
+        theta_bn = np.arccos(cos_theta_bn)
 
-            cs_sq_sr = np.divide(gamma * press1, w1, out=np.zeros((), dtype=float), where=w1 > 0)
-            va_sq_sr = np.divide(bsq1, w1 + bsq1, out=np.zeros((), dtype=float), where=(w1 + bsq1) > 0)
-            b_mag1 = np.sqrt(bsq1)
-            b_dot_n = b1[ku, ju, iu] * n_r[k, j, i] + b2[ku, ju, iu] * n_theta[k, j, i] + b3[ku, ju, iu] * n_phi[k, j, i]
-            cos_theta_bn = np.divide(np.abs(b_dot_n), b_mag1, out=np.zeros((), dtype=float), where=b_mag1 > 0)
-            cos_theta_bn = np.clip(cos_theta_bn, 0.0, 1.0)
-            sin_theta_sq = np.maximum(0.0, 1.0 - cos_theta_bn**2)
-            theta_bn = np.arccos(cos_theta_bn)
+        cfast_sq = cs_sq_sr + va_sq_sr * sin_theta_sq - cs_sq_sr * va_sq_sr * sin_theta_sq
+        cfast_sq = np.clip(cfast_sq, 0.0, 1.0 - 1e-12)
+        cfast_n = np.sqrt(cfast_sq)
+        u_fast = np.divide(cfast_n, np.sqrt(np.maximum(1.0 - cfast_sq, 1e-12)))
+        sr_mach = np.divide(np.abs(u_n1), u_fast, out=np.zeros((), dtype=float), where=u_fast > 0)
 
-            cfast_sq = cs_sq_sr + va_sq_sr * sin_theta_sq - cs_sq_sr * va_sq_sr * sin_theta_sq
-            cfast_sq = np.clip(cfast_sq, 0.0, 1.0 - 1e-12)
-            cfast_n = np.sqrt(cfast_sq)
-            u_fast = np.divide(cfast_n, np.sqrt(np.maximum(1.0 - cfast_sq, 1e-12)))
-            sr_mach = np.divide(np.abs(u_n1), u_fast, out=np.zeros((), dtype=float), where=u_fast > 0)
+        rho_flux_up = rho1 * u_n1
+        rho_flux_down = rho2 * u_n2
+        entropy_up = np.divide(press1, np.power(rho1, gamma), out=np.zeros((), dtype=float), where=rho1 > 0)
+        entropy_down = np.divide(press2, np.power(rho2, gamma), out=np.zeros((), dtype=float), where=rho2 > 0)
+        entropy_jump = entropy_down - entropy_up
+        ptot_jump = p2_tot - p1_tot
+        jump_residual_light = np.divide(np.abs(rho_flux_down - rho_flux_up), np.abs(rho_flux_up) + 1e-30)
+        jump_residual_light += np.divide(np.maximum(0.0, -ptot_jump), p1_tot + 1e-30)
 
-            rho_flux_up = rho1 * u_n1
-            rho_flux_down = rho2 * u_n2
-            entropy_up = np.divide(press1, np.power(rho1, gamma), out=np.zeros((), dtype=float), where=rho1 > 0)
-            entropy_down = np.divide(press2, np.power(rho2, gamma), out=np.zeros((), dtype=float), where=rho2 > 0)
-            entropy_jump = entropy_down - entropy_up
-            ptot_jump = p2_tot - p1_tot
-            jump_residual_light = np.divide(np.abs(rho_flux_down - rho_flux_up), np.abs(rho_flux_up) + 1e-30)
-            jump_residual_light += np.divide(np.maximum(0.0, -ptot_jump), p1_tot + 1e-30)
+        h_rel_upstream_grid[k, j, i] = h1
+        w_rel_upstream_grid[k, j, i] = w1
+        v_n_upstream_grid[k, j, i] = v_n1
+        u_n_upstream_grid[k, j, i] = u_n1
+        theta_bn_grid[k, j, i] = theta_bn
+        cfast_n_upstream_grid[k, j, i] = cfast_n
+        sr_mach_normal_grid[k, j, i] = sr_mach
+        ptot_jump_grid[k, j, i] = ptot_jump
+        entropy_jump_grid[k, j, i] = entropy_jump
+        jump_residual_light_grid[k, j, i] = jump_residual_light
 
-            h_rel_upstream_grid[k, j, i] = h1
-            w_rel_upstream_grid[k, j, i] = w1
-            v_n_upstream_grid[k, j, i] = v_n1
-            u_n_upstream_grid[k, j, i] = u_n1
-            theta_bn_grid[k, j, i] = theta_bn
-            cfast_n_upstream_grid[k, j, i] = cfast_n
-            sr_mach_normal_grid[k, j, i] = sr_mach
-            ptot_jump_grid[k, j, i] = ptot_jump
-            entropy_jump_grid[k, j, i] = entropy_jump
-            jump_residual_light_grid[k, j, i] = jump_residual_light
+        sr_accept = True
+        if sr_mach <= sr_mach_min:
+            sr_reject_low_mach_count += 1
+            sr_accept = False
+        elif jump_residual_light >= jump_residual_max:
+            sr_reject_jump_count += 1
+            sr_accept = False
+        elif entropy_jump <= 0:
+            sr_reject_entropy_count += 1
+            sr_accept = False
 
-            sr_accept = True
-            if enable_sr_refine:
-                if sr_mach <= sr_mach_min:
-                    sr_reject_low_mach_count += 1
-                    sr_accept = False
-                elif jump_residual_light >= jump_residual_max:
-                    sr_reject_jump_count += 1
-                    sr_accept = False
-                elif entropy_jump <= 0:
-                    sr_reject_entropy_count += 1
-                    sr_accept = False
+        if sr_accept:
+            refined_shock_mask[k, j, i] = True
+            mainline_mach_grid[k, j, i] = sr_mach
+            sr_accepted_count += 1
 
-            if sr_accept:
-                mask_sr_refined[k, j, i] = True
-                sr_accepted_count += 1
-
-    verified_cells = int(np.sum(final_shock_mask))
+    verified_cells = int(np.sum(verified_shock_mask))
+    refined_cells = int(np.sum(refined_shock_mask))
     sampling_stats = {
+        "gate_stats": gate_stats,
+        "geom_candidate_count": int(geom_candidate_count),
         "candidate_count": int(len(candidate_indices)),
         "verified_count": verified_cells,
         "boundary_clipped_candidate_count": int(boundary_clip_count),
@@ -540,13 +462,12 @@ def find_shocks_in_roi_mhd(
         "sr_rejected_jump_count": int(sr_reject_jump_count),
         "sr_rejected_entropy_count": int(sr_reject_entropy_count),
     }
-    print(f"  Verified {verified_cells} MHD shock cells.")
-    if enable_sr_refine:
-        print(
-            "  SR refinement diagnostics: "
-            f"accepted={sr_accepted_count}, low_mach={sr_reject_low_mach_count}, "
-            f"jump={sr_reject_jump_count}, entropy={sr_reject_entropy_count}"
-        )
+    print(f"  Verified {verified_cells} candidate shock cells.")
+    print(
+        "  Mainline SRMHD shock selection: "
+        f"accepted={refined_cells}, low_mach={sr_reject_low_mach_count}, "
+        f"jump={sr_reject_jump_count}, entropy={sr_reject_entropy_count}"
+    )
     print(
         "  Downstream sampling diagnostics: "
         f"candidate_clipped={boundary_clip_count}, accepted_clipped={accepted_boundary_clip_count}"
@@ -554,29 +475,30 @@ def find_shocks_in_roi_mhd(
     if logger:
         logger.ai.debug(f"Verified shock cells={verified_cells}")
         logger.ai.debug(f"Sampling diagnostics={sampling_stats}")
-        if verified_cells > 0:
-            logger.ai.data("shock.upstream_mach.active", upstream_mach_grid[final_shock_mask])
-            logger.ai.data("shock.rho2_code.active", rho2_code_grid[final_shock_mask])
-            logger.ai.data("shock.press2_code.active", press2_code_grid[final_shock_mask])
-            logger.ai.data("shock.bsq2_code.active", bsq2_code_grid[final_shock_mask])
-            logger.ai.data("shock.beta2.active", beta2_grid[final_shock_mask])
-            logger.ai.data("shock.sigma2.active", sigma2_grid[final_shock_mask])
-            logger.ai.data("shock.sr_mach_normal.active", sr_mach_normal_grid[final_shock_mask])
-            logger.ai.data("shock.utilde_sq_upstream.active", utilde_sq_upstream_grid[final_shock_mask])
-            logger.ai.data("shock.gamma_lorentz_upstream.active", gamma_lorentz_upstream_grid[final_shock_mask])
-            logger.ai.data("shock.utilde_n_upstream.active", utilde_n_upstream_grid[final_shock_mask])
-            logger.ai.data("shock.theta_bn.active", theta_bn_grid[final_shock_mask])
-            logger.ai.data("shock.jump_residual_light.active", jump_residual_light_grid[final_shock_mask])
+        if refined_cells > 0:
+            logger.ai.data("shock.mainline_mach.active", mainline_mach_grid[refined_shock_mask])
+            logger.ai.data("shock.rho2_code.active", rho2_code_grid[refined_shock_mask])
+            logger.ai.data("shock.press2_code.active", press2_code_grid[refined_shock_mask])
+            logger.ai.data("shock.bsq2_code.active", bsq2_code_grid[refined_shock_mask])
+            logger.ai.data("shock.beta2.active", beta2_grid[refined_shock_mask])
+            logger.ai.data("shock.sigma2.active", sigma2_grid[refined_shock_mask])
+            logger.ai.data("shock.sr_mach_normal.active", sr_mach_normal_grid[refined_shock_mask])
+            logger.ai.data("shock.utilde_sq_upstream.active", utilde_sq_upstream_grid[refined_shock_mask])
+            logger.ai.data("shock.gamma_lorentz_upstream.active", gamma_lorentz_upstream_grid[refined_shock_mask])
+            logger.ai.data("shock.utilde_n_upstream.active", utilde_n_upstream_grid[refined_shock_mask])
+            logger.ai.data("shock.theta_bn.active", theta_bn_grid[refined_shock_mask])
+            logger.ai.data("shock.jump_residual_light.active", jump_residual_light_grid[refined_shock_mask])
             logger.ai.codepath(
                 "Shock detection branch",
-                f"verified shock cells present, candidate count={len(candidate_indices)}",
+                f"SRMHD mainline shock cells present, verified={verified_cells}, accepted={refined_cells}",
             )
         else:
-            logger.ai.codepath("Shock detection branch", "no verified shock cells")
+            logger.ai.codepath("Shock detection branch", "no SRMHD mainline shock cells")
 
     result = {
-        "mask": final_shock_mask,
-        "upstream_mach": upstream_mach_grid,
+        "mask": refined_shock_mask,
+        "verified_mask": verified_shock_mask,
+        "mainline_mach": mainline_mach_grid,
         "downstream_temp": downstream_temp_grid,
         "downstream_n_e": downstream_ne_grid,
         "rho2_code_grid": rho2_code_grid,
@@ -585,7 +507,6 @@ def find_shocks_in_roi_mhd(
         "bsq2_code_grid": bsq2_code_grid,
         "beta2_grid": beta2_grid,
         "sigma2_grid": sigma2_grid,
-        "mask_sr_refined": mask_sr_refined,
         "h_rel_upstream": h_rel_upstream_grid,
         "w_rel_upstream": w_rel_upstream_grid,
         "v_n_upstream": v_n_upstream_grid,
@@ -614,570 +535,6 @@ def find_shocks_in_roi_mhd(
     return result
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    sample_k2_grid = np.full_like(press, -1, dtype=int)
-    sample_j2_grid = np.full_like(press, -1, dtype=int)
-    sample_i2_grid = np.full_like(press, -1, dtype=int)
-    sample_boundary_clipped_grid = np.zeros_like(press, dtype=bool)
-    M_P, K_B = 1.6726e-24, 1.3806e-16
-    mu = 0.5
-
-    boundary_clip_count = 0
-    accepted_boundary_clip_count = 0
-
-    # 逻辑梯度用于索引回溯
-    gk, gj, gi = np.gradient(p_tot)
-
-    for k, j, i in candidate_indices:
-        # 确定主导轴进行回溯 [cite: 8440]
-        dominant_axis = np.argmax([np.abs(gk[k,j,i]), np.abs(gj[k,j,i]), np.abs(gi[k,j,i])])
-        
-        dk, dj, di = 0, 0, 0
-        if dominant_axis == 0: dk = -int(np.sign(gk[k,j,i]))
-        elif dominant_axis == 1: dj = -int(np.sign(gj[k,j,i]))
-        else: di = -int(np.sign(gi[k,j,i]))
-
-        # 采样上下游 (State 1: Upstream, State 2: Downstream)
-        ku_raw, ju_raw, iu_raw = k + dk*march_cells, j + dj*march_cells, i + di*march_cells
-        kd_raw, jd_raw, id_raw = k - dk*march_cells, j - dj*march_cells, i - di*march_cells
-        ku, ju, iu = np.clip([ku_raw, ju_raw, iu_raw], 0, [nk-1, nj-1, ni-1])
-        kd, jd, id_ = np.clip([kd_raw, jd_raw, id_raw], 0, [nk-1, nj-1, ni-1])
-        boundary_clipped = (ku != ku_raw) or (ju != ju_raw) or (iu != iu_raw) or (kd != kd_raw) or (jd != jd_raw) or (id_ != id_raw)
-        if boundary_clipped:
-            boundary_clip_count += 1
-
-        p1_tot = p_tot[ku, ju, iu]
-        p2_tot = p_tot[kd, jd, id_]
-
-        # 压缩性验证：下游总压必须大于上游 [cite: 7837, 8514]
-        if p2_tot <= p1_tot * 1.05: continue 
-
-        # 使用总压跳变反推物理马赫数 (MHD 激波近似公式) [cite: 8412]
-        press_ratio = p2_tot / p1_tot
-        m_phys_sq = 1.0 + (press_ratio - 1.0) * (gamma + 1.0) / (2.0 * gamma)
-        m_phys = np.sqrt(m_phys_sq)
-
-        if m_phys >= min_physical_mach:
-            final_shock_mask[k,j,i] = True
-            upstream_mach_grid[k,j,i] = m_phys
-            downstream_temp_grid[k,j,i] = (press[kd, jd, id_] * mu * M_P) / (rho[kd, jd, id_] * K_B)
-            downstream_ne_grid[k,j,i] = rho[kd, jd, id_] / M_P
-            rho2_code_grid[k, j, i] = rho[kd, jd, id_]
-            press2_code_grid[k, j, i] = press[kd, jd, id_]
-            press2_over_rho2_grid[k, j, i] = np.divide(
-                press[kd, jd, id_],
-                rho[kd, jd, id_],
-                out=np.array(0.0, dtype=float),
-                where=rho[kd, jd, id_] > 0,
-            )
-            sample_k2_grid[k, j, i] = kd
-            sample_j2_grid[k, j, i] = jd
-            sample_i2_grid[k, j, i] = id_
-            sample_boundary_clipped_grid[k, j, i] = boundary_clipped
-            if boundary_clipped:
-                accepted_boundary_clip_count += 1
-
-
-    verified_cells = int(np.sum(final_shock_mask))
-    sampling_stats = {
-        "candidate_count": int(len(candidate_indices)),
-        "verified_count": verified_cells,
-        "boundary_clipped_candidate_count": int(boundary_clip_count),
-        "boundary_clipped_verified_count": int(accepted_boundary_clip_count),
-    }
-    print(f"  Verified {verified_cells} MHD shock cells.")
-    print(
-        "  Downstream sampling diagnostics: "
-        f"candidate_clipped={boundary_clip_count}, accepted_clipped={accepted_boundary_clip_count}"
-    )
-    if logger:
-        logger.ai.debug(f"Verified shock cells={verified_cells}")
-        logger.ai.debug(f"Sampling diagnostics={sampling_stats}")
-        if verified_cells > 0:
-            logger.ai.data("shock.upstream_mach.active", upstream_mach_grid[final_shock_mask])
-            logger.ai.data("shock.rho2_code.active", rho2_code_grid[final_shock_mask])
-            logger.ai.data("shock.press2_code.active", press2_code_grid[final_shock_mask])
-            logger.ai.codepath(
-                "Shock detection branch",
-                f"verified shock cells present, candidate count={len(candidate_indices)}",
-            )
-        else:
-            logger.ai.codepath("Shock detection branch", "no verified shock cells")
-
-    result = {
-        "mask": final_shock_mask,
-        "upstream_mach": upstream_mach_grid,
-        "downstream_temp": downstream_temp_grid,
-        "downstream_n_e": downstream_ne_grid,
-        "rho2_code_grid": rho2_code_grid,
-        "press2_code_grid": press2_code_grid,
-        "press2_over_rho2_grid": press2_over_rho2_grid,
-        "sample_k2_grid": sample_k2_grid,
-        "sample_j2_grid": sample_j2_grid,
-        "sample_i2_grid": sample_i2_grid,
-        "sample_boundary_clipped_grid": sample_boundary_clipped_grid,
-        "sampling_stats": sampling_stats,
-        "grad_p_mag": grad_P_mag,
-    }
-    if "sigma_grid" in roi_data:
-        result["sigma2_grid"] = np.where(final_shock_mask, roi_data["sigma_grid"], 0.0)
-
-    if logger:
-        logger.ai.func_exit(
-            "find_shocks_in_roi_mhd",
-            {"verified_cells": verified_cells, "result_keys": sorted(result.keys())},
-        )
-    return result
-
-
 def visualize_shock_3d_interactive_html(roi_data, shock_properties, snapshot_name, html_plot_filename,
                                         x_lim=260.0, y_lim=260.0, z_lim=1200.0):
     """【Interactive HTML 3D版 v3】"""
@@ -1186,7 +543,7 @@ def visualize_shock_3d_interactive_html(roi_data, shock_properties, snapshot_nam
     print(f"Generating INTERACTIVE 3D shock visualization (X,Y < {x_lim}, Z < {z_lim} r_g)...")
     # ... (代码来自 shock_v1.py / workflowShock_processpool.py) ...
     shock_mask_roi = shock_properties['mask']
-    upstream_mach_roi = shock_properties['upstream_mach']
+    upstream_mach_roi = shock_properties['mainline_mach']
     num_shocks_total = np.sum(shock_mask_roi)
     if num_shocks_total == 0:
         print("  No shocks found to visualize in 3D. Skipping.")
@@ -1219,7 +576,7 @@ def visualize_shock_3d_interactive_html(roi_data, shock_properties, snapshot_nam
         mode='markers',
         marker=dict(
             size=2, color=mach_shocks_filtered, colorscale='Plasma',
-            opacity=0.7, colorbar=dict(title='Upstream Mach ($M_1$)'),
+            opacity=0.7, colorbar=dict(title='Mainline SR Mach'),
             cmin=1.0, cmax=max(2.0, np.quantile(mach_shocks_filtered, 0.95)) # 自动调整色阶上限
         )
     )])
@@ -1237,179 +594,7 @@ def visualize_shock_3d_interactive_html(roi_data, shock_properties, snapshot_nam
     fig.write_html(html_plot_filename)
     print(f"Interactive 3D visualization saved to {html_plot_filename}")
     
-def visualize_shock_overview(roi_data, shock_properties, snapshot_name, shock_plot_filename, config):
-    """【全局概览版】"""
-    print("Generating shock overview visualization...")
-    # ... (代码来自 workflowShock_processpool.py) ...
-    shock_mask_roi = shock_properties['mask']
-    k_slice_index = shock_mask_roi.shape[0] // 2
-    pressure_slice = roi_data['press'][k_slice_index, :, :]
-    shock_mask_slice = shock_mask_roi[k_slice_index, :, :]
-    num_shocks_in_slice = np.sum(shock_mask_slice)
-    print(f"Diagnostic: Found {num_shocks_in_slice} shock cells on this 2D slice.")
-    r_faces, theta_faces = roi_data['x1f'], roi_data['x2f']
-    r_centers = (r_faces[:-1] + r_faces[1:]) / 2.0
-    theta_centers = (theta_faces[:-1] + theta_faces[1:]) / 2.0
-    r_grid_centers, theta_grid_centers = np.meshgrid(r_centers, theta_centers, indexing='xy')
-    R_cyl_centers = r_grid_centers * np.sin(theta_grid_centers)
-    Z_cyl_centers = r_grid_centers * np.cos(theta_grid_centers)
-    fig, ax = plt.subplots(figsize=(10, 10))
-    pressure_slice_log = np.log10(pressure_slice + 1e-30)
-    vmin_fixed, vmax_fixed = config['v_min'], config['v_max'] 
-    im = ax.pcolormesh(R_cyl_centers, Z_cyl_centers, pressure_slice_log, 
-                       cmap='magma', shading='auto', vmin=vmin_fixed, vmax=vmax_fixed)
-    fig.colorbar(im, ax=ax, label='log10(Pressure)', extend='both')
-    if num_shocks_in_slice > 0:
-        shock_overlay = np.zeros((pressure_slice.shape[0], pressure_slice.shape[1], 4))
-        shock_overlay[shock_mask_slice] = [0.2, 1.0, 0.2, 0.7] # 亮绿色
-        ax.imshow(shock_overlay, origin='lower', 
-                  extent=[R_cyl_centers.min(), R_cyl_centers.max(), Z_cyl_centers.min(), Z_cyl_centers.max()],
-                  aspect='auto', interpolation='none')
-    ax.set_title(f"Shock Fronts in {snapshot_name}")
-    ax.set_xlabel("R (Cylindrical Radius) [$r_g$]")
-    ax.set_ylabel("Z (Height) [$r_g$]")
-    ax.set_aspect('equal', 'box')
-    plt.savefig(shock_plot_filename, dpi=200, bbox_inches='tight')
-    print(f"Overview visualization saved to {shock_plot_filename}")
-    plt.close(fig)
 
-def visualize_shock_projection_dual_range(roi_data, shock_properties, snapshot_name, shock_plot_filename):
-    """【俯视图版 - 双范围】"""
-    print("Generating dual-range shock projection (top-down view)...")
-    # ... (代码来自 shock_v1.py / workflowShock_processpool.py) ...
-    shock_mask_roi = shock_properties['mask']
-    num_shocks_total = np.sum(shock_mask_roi)
-    if num_shocks_total == 0:
-        print("  No shocks found to project. Skipping visualization.")
-        return
-    k_indices, j_indices, i_indices = np.where(shock_mask_roi)
-    r_centers = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
-    theta_centers = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
-    phi_centers = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
-    r_shocks = r_centers[i_indices]
-    theta_shocks = theta_centers[j_indices]
-    phi_shocks = phi_centers[k_indices]
-    x_shocks = r_shocks * np.sin(theta_shocks) * np.cos(phi_shocks)
-    y_shocks = r_shocks * np.sin(theta_shocks) * np.sin(phi_shocks)
-    fig, (ax_inner, ax_outer) = plt.subplots(1, 2, figsize=(18, 9))
-    fig.suptitle(f"Shock Density Projection (Top-Down View) for {snapshot_name}", fontsize=16)
-    cmap = 'inferno'
-    inner_mask = (r_shocks < 50)
-    x_shocks_inner, y_shocks_inner = x_shocks[inner_mask], y_shocks[inner_mask]
-    plot_range_inner, bins_inner = 100, 256
-    vmin_inner, vmax_inner = 1, 50
-    norm_in = LogNorm(vmin=vmin_inner, vmax=vmax_inner)
-    if len(x_shocks_inner) > 0:
-        h_inner = ax_inner.hist2d(x_shocks_inner, y_shocks_inner, bins=bins_inner, 
-                                  range=[[-plot_range_inner, plot_range_inner], [-plot_range_inner, plot_range_inner]],
-                                  cmap=cmap, cmin=1, norm=norm_in)
-        fig.colorbar(h_inner[3], ax=ax_inner, label='Shock Cells per Bin (Inner)', extend='max')
-    ax_inner.set_title(f"Inner Region (r < 50 $r_g$)")
-    ax_inner.set_xlabel("X [$r_g$]"); ax_inner.set_ylabel("Y [$r_g$]")
-    ax_inner.set_facecolor('black'); ax_inner.set_aspect('equal', 'box')
-    ax_inner.set_xlim(-plot_range_inner, plot_range_inner); ax_inner.set_ylim(-plot_range_inner, plot_range_inner)
-    outer_mask = (r_shocks >= 50)
-    x_shocks_outer, y_shocks_outer = x_shocks[outer_mask], y_shocks[outer_mask]
-    plot_range_outer, bins_outer = 800, 128
-    vmin_outer, vmax_outer = 1, 10
-    norm_out = LogNorm(vmin=vmin_outer, vmax=vmax_outer)
-    if len(x_shocks_outer) > 0:
-        h_outer = ax_outer.hist2d(x_shocks_outer, y_shocks_outer, bins=bins_outer, 
-                                  range=[[-plot_range_outer, plot_range_outer], [-plot_range_outer, plot_range_outer]],
-                                  cmap=cmap, cmin=1, norm=norm_out)
-        fig.colorbar(h_outer[3], ax=ax_outer, label='Shock Cells per Bin Outer (log)', extend='max')
-    ax_outer.set_title(f"Outer Region (r >= 50 $r_g$)")
-    ax_outer.set_xlabel("X [$r_g$]"); ax_outer.set_ylabel("Y [$r_g$]")
-    ax_outer.set_facecolor('black'); ax_outer.set_aspect('equal', 'box')
-    ax_outer.set_xlim(-plot_range_outer, plot_range_outer); ax_outer.set_ylim(-plot_range_outer, plot_range_outer)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig(shock_plot_filename, dpi=200, bbox_inches='tight')
-    print(f"Dual-range projection visualization saved to {shock_plot_filename}")
-    plt.close(fig)
-
-def visualize_shock_xz_plane(roi_data, shock_properties, snapshot_name, shock_plot_filename, config):
-    """
-    【X-Z平面全景侧视图版】
-    - 选取一个phi角切片，并将其与phi+pi的镜像部分一同绘制，构成完整的X-Z平面。
-    - 仅绘制北半球 (theta: 0 to pi/2)。
-    - 使用线性和固定的颜色范围。
-    - 使用鲜绿色高亮激波区域。
-
-    【X-Z平面全景侧视图版 v2】
-    - 修正了'phi_centers'变量在使用前未定义的错误。
-
-    【X-Z平面全景侧视图版 v3】
-    - 修正了只显示右半平面的问题，通过手动设置X轴范围来确保左右对称显示。
-    """
-    print("Generating shock X-Z plane visualization (full side-view)...")
-
-    # --- 1. 数据准备 ---
-    shock_mask_roi = shock_properties['mask']
-    k_slice_index = shock_mask_roi.shape[0] // 2 
-    pressure_slice = roi_data['press'][k_slice_index, :, :]
-    shock_mask_slice = shock_mask_roi[k_slice_index, :, :]
-    num_shocks_in_slice = np.sum(shock_mask_slice)
-    
-    # --- 2. 准备坐标 ---
-    r_centers = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
-    theta_centers = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
-    phi_centers = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
-    
-    # 打印诊断信息
-    print(f"Diagnostic: Found {num_shocks_in_slice} shock cells on the phi={phi_centers[k_slice_index]:.2f} slice.")
-    
-    phi_slice_val = phi_centers[k_slice_index]
-    r_grid_centers, theta_grid_centers = np.meshgrid(r_centers, theta_centers, indexing='xy')
-    Z_coords = r_grid_centers * np.cos(theta_grid_centers)
-    X_coords = r_grid_centers * np.sin(theta_grid_centers) * np.cos(phi_slice_val)
-
-    # --- 3. 绘图 ---
-    fig, ax = plt.subplots(figsize=(10, 10))
-    pressure_slice_log = np.log10(pressure_slice + 1e-30)
-
-    vmin_fixed, vmax_fixed = config['v_min'], config['v_max']  
-    cmap = 'magma'
-    
-    # a & b. 绘制左右两个半平面
-    ax.pcolormesh(X_coords, Z_coords, pressure_slice_log, 
-                  cmap=cmap, shading='auto', vmin=vmin_fixed, vmax=vmax_fixed)
-    ax.pcolormesh(-X_coords, Z_coords, pressure_slice_log, 
-                  cmap=cmap, shading='auto', vmin=vmin_fixed, vmax=vmax_fixed)
-
-    # c. 叠加激波区域
-    if num_shocks_in_slice > 0:
-        shock_overlay = np.zeros((pressure_slice.shape[0], pressure_slice.shape[1], 4))
-        shock_overlay[shock_mask_slice] = [0.2, 1.0, 0.2, 0.7] # 半透明鲜绿色
-        
-        # extent 定义了图像的坐标范围 [xmin, xmax, ymin, ymax]
-        extent_right = [np.min(X_coords), np.max(X_coords), np.min(Z_coords), np.max(Z_coords)]
-        extent_left = [-np.max(X_coords), -np.min(X_coords), np.min(Z_coords), np.max(Z_coords)]
-        
-        ax.imshow(shock_overlay, origin='lower', extent=extent_right, aspect='auto', interpolation='none')
-        ax.imshow(shock_overlay, origin='lower', extent=extent_left, aspect='auto', interpolation='none')
-
-    # --- 4. 美化图像 ---
-    ax.set_title(f"Shock Fronts in X-Z Plane for {snapshot_name}")
-    ax.set_xlabel("X [$r_g$]")
-    ax.set_ylabel("Z (Height) [$r_g$]")
-    ax.set_aspect('equal', 'box')
-    
-    # --- 【核心修正】: 手动设置X轴的显示范围 ---
-    # 找到X坐标的最大绝对值
-    x_max_abs = np.max(np.abs(X_coords))
-    # 设置X轴范围为对称的 [-max, +max]，并增加5%的留白
-    ax.set_xlim(-x_max_abs * 1.05, x_max_abs * 1.05)
-    # --- 【修正结束】 ---
-    
-    # 添加 colorbar
-    norm = Normalize(vmin=vmin_fixed, vmax=vmax_fixed)
-    sm = ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    fig.colorbar(sm, ax=ax, label='log10(Pressure)', extend='both')
-
-    plt.savefig(shock_plot_filename, dpi=200, bbox_inches='tight')
-    print(f"X-Z plane visualization saved to {shock_plot_filename}")
-    plt.close(fig)
 
 # --- 主程序入口 ---
 if __name__ == '__main__':

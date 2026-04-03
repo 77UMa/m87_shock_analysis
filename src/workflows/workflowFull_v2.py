@@ -78,11 +78,25 @@ def process_snapshot(filename, config, logger=None):
         nt_params.setdefault("r_high", physics_cfg.get("r_high", 80.0))
         nt_params.setdefault("beta_crit", physics_cfg.get("beta_crit", 1.0))
         shock_sr_cfg = dict(config.get("shock_sr", {}))
-        nt_params["use_sr_refined_mask"] = shock_sr_cfg.get("use_sr_refined_mask_for_nt", False)
+        stale_keys = [key for key in ("enable_sr_refine", "use_sr_refined_mask_for_nt") if key in shock_sr_cfg]
+        if stale_keys:
+            raise ValueError(
+                "Removed shock_sr controls detected: "
+                + ", ".join(stale_keys)
+                + ". SRMHD is now the only mainline shock chain."
+            )
         shock_params = dict(config["shock_params"])
+        removed_shock_controls = [
+            key for key in ("mach_threshold_loose", "min_physical_mach") if key in shock_params
+        ]
+        if removed_shock_controls:
+            raise ValueError(
+                "Removed classical shock controls detected: "
+                + ", ".join(removed_shock_controls)
+                + ". Candidate screening is now SRMHD-mainline only."
+            )
         shock_params.update(
             {
-                "enable_sr_refine": shock_sr_cfg.get("enable_sr_refine", True),
                 "sr_mach_min": shock_sr_cfg.get("sr_mach_min", 1.2),
                 "jump_residual_max": shock_sr_cfg.get("jump_residual_max", 0.4),
             }
@@ -96,18 +110,14 @@ def process_snapshot(filename, config, logger=None):
             )
             dual_logger.ai.codepath("Physics branch", f"enable_advection={enable_advection}")
             dual_logger.human.info(
-                "SR refine config: "
-                f"enable_sr_refine={shock_params['enable_sr_refine']}, "
+                "SRMHD mainline config: "
                 f"sr_mach_min={shock_params['sr_mach_min']:.2f}, "
-                f"jump_residual_max={shock_params['jump_residual_max']:.2f}, "
-                f"use_sr_refined_mask_for_nt={nt_params['use_sr_refined_mask']}"
+                f"jump_residual_max={shock_params['jump_residual_max']:.2f}"
             )
             dual_logger.ai.codepath(
-                "SR refine experiment config",
-                f"enable_sr_refine={shock_params['enable_sr_refine']}, "
+                "SRMHD mainline config",
                 f"sr_mach_min={shock_params['sr_mach_min']:.2f}, "
-                f"jump_residual_max={shock_params['jump_residual_max']:.2f}, "
-                f"use_sr_refined_mask_for_nt={nt_params['use_sr_refined_mask']}",
+                f"jump_residual_max={shock_params['jump_residual_max']:.2f}",
             )
 
         shock_props, nonthermal_props = calculate_dsa_physics(
@@ -123,7 +133,7 @@ def process_snapshot(filename, config, logger=None):
 
         if dual_logger and np.any(shock_props["mask"]):
             mask = shock_props["mask"]
-            mach_vals = shock_props["upstream_mach"][mask]
+            mach_vals = shock_props["mainline_mach"][mask]
             sigma_vals = shock_props.get("sigma_grid")
             sigma_vals = sigma_vals[mask] if sigma_vals is not None else None
             coverage = float(np.sum(mask) / mask.size)
@@ -134,7 +144,7 @@ def process_snapshot(filename, config, logger=None):
                 sigma_values=sigma_vals,
                 coverage=coverage,
             )
-            dual_logger.ai.data("shock_props.upstream_mach.active", mach_vals)
+            dual_logger.ai.data("shock_props.mainline_mach.active", mach_vals)
             if sigma_vals is not None:
                 dual_logger.ai.data("shock_props.sigma.active", sigma_vals)
         elif dual_logger:
@@ -175,15 +185,13 @@ def process_snapshot(filename, config, logger=None):
             dual_logger.human.time("Advection-diffusion", stage_times["advection"])
 
         if dual_logger and np.any(shock_props["mask"]):
-            verified_mask = shock_props["mask"]
-            nt_mask = nonthermal_props.get("mask", verified_mask)
+            verified_mask = shock_props.get("verified_mask", shock_props["mask"])
+            nt_mask = nonthermal_props.get("mask", shock_props["mask"])
             c_grid = nonthermal_props.get("C_grid", np.array([]))
             q_grid = nonthermal_props.get("q_grid", np.array([]))
             gamma_min_grid = nonthermal_props.get("gamma_min_grid", np.array([]))
             gamma_failure = nonthermal_props.get("gamma_min_failure_code_grid", np.array([]))
             sigma_suppression = nonthermal_props.get("sigma_suppression_grid")
-            nt_mask_name = "mask_sr_refined" if nt_params["use_sr_refined_mask"] else "mask"
-
             if np.size(c_grid) > 0:
                 c_vals = c_grid[nt_mask]
                 q_vals = q_grid[nt_mask]
@@ -199,8 +207,7 @@ def process_snapshot(filename, config, logger=None):
                     sigma_suppression=suppression_vals,
                 )
                 dual_logger.human.info(
-                    f"NT injection mask source: {nt_mask_name}; "
-                    f"verified_shocks={int(np.sum(verified_mask))}; nt_active_cells={int(np.sum(nt_mask))}"
+                    f"NT mainline shock cells: verified_candidates={int(np.sum(verified_mask))}; accepted_mainline={int(np.sum(nt_mask))}"
                 )
                 dual_logger.human.info(
                     "Branch summary: "
@@ -220,14 +227,13 @@ def process_snapshot(filename, config, logger=None):
                     f"verified={sampling_stats['verified_count']}, "
                     f"accepted_boundary_clipped={sampling_stats['boundary_clipped_verified_count']}"
                 )
-                if shock_params.get("enable_sr_refine", True):
-                    dual_logger.human.info(
-                        "SR refinement summary: "
-                        f"refined={sampling_stats.get('sr_refined_count', 0)}, "
-                        f"rejected_low_mach={sampling_stats.get('sr_rejected_low_mach_count', 0)}, "
-                        f"rejected_jump={sampling_stats.get('sr_rejected_jump_count', 0)}, "
-                        f"rejected_entropy={sampling_stats.get('sr_rejected_entropy_count', 0)}"
-                    )
+                dual_logger.human.info(
+                    "SRMHD mainline summary: "
+                    f"refined={sampling_stats.get('sr_refined_count', 0)}, "
+                    f"rejected_low_mach={sampling_stats.get('sr_rejected_low_mach_count', 0)}, "
+                    f"rejected_jump={sampling_stats.get('sr_rejected_jump_count', 0)}, "
+                    f"rejected_entropy={sampling_stats.get('sr_rejected_entropy_count', 0)}"
+                )
 
             sigma2_grid = shock_props.get("sigma2_grid")
             if sigma2_grid is not None:
@@ -251,7 +257,7 @@ def process_snapshot(filename, config, logger=None):
 
             dual_logger.ai.codepath(
                 "Branch split",
-                f"legacy UNTH branch and physical gamma_min branch logged separately; nt_mask_source={nt_mask_name}",
+                "SRMHD mainline shock mask consumed by NT and gamma_min branches",
             )
 
 

@@ -187,7 +187,8 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
             "press2_over_rho2_grid": np.zeros_like(roi_data["rho"]),
             "bsq2_code_grid": np.zeros_like(roi_data["rho"]),
             "beta2_grid": np.zeros_like(roi_data["rho"]),
-            "mask_sr_refined": np.zeros_like(roi_data["rho"], dtype=bool),
+            "mainline_mach": np.zeros_like(roi_data["rho"]),
+            "verified_mask": np.zeros_like(roi_data["rho"], dtype=bool),
             "h_rel_upstream": np.zeros_like(roi_data["rho"]),
             "w_rel_upstream": np.zeros_like(roi_data["rho"]),
             "v_n_upstream": np.zeros_like(roi_data["rho"]),
@@ -303,6 +304,9 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
         q_grid = nonthermal_props.get("q_grid", np.zeros_like(rho))
         gamma_min_grid = nonthermal_props.get("gamma_min_grid", np.ones_like(rho))
         gamma_failure_grid = nonthermal_props.get("gamma_min_failure_code_grid", np.zeros_like(rho, dtype=np.int16))
+        if "mainline_mach" not in shock_props:
+            raise KeyError("mainline_mach")
+        mainline_mach_grid = shock_props["mainline_mach"]
         p_grid = np.where(mask, q_grid - 1.0, 3.0)
 
         shock_gamma_vals = gamma_min_grid[mask] if np.any(mask) else np.array([])
@@ -334,8 +338,6 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
         )
 
         handle.create_dataset("KEL", data=mask.transpose(2, 1, 0).astype("f8"))
-        if "mask_sr_refined" in shock_props:
-            handle.create_dataset("KEL_SR", data=shock_props["mask_sr_refined"].transpose(2, 1, 0).astype("f8"))
         handle.create_dataset("UNTH", data=c_grid.transpose(2, 1, 0).astype("f8"))
         handle.create_dataset("p", data=p_grid.transpose(2, 1, 0).astype("f8"))
         handle.create_dataset("GAMMA_MIN", data=gamma_min_grid.transpose(2, 1, 0).astype("f8"))
@@ -418,7 +420,11 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
 
         sampling_stats = shock_props.get("sampling_stats", {})
         for key, value in sampling_stats.items():
-            handle.attrs[f"shock_sampling_{key}"] = value
+            if isinstance(value, dict):
+                for subkey, subvalue in value.items():
+                    handle.attrs[f"shock_sampling_{key}_{subkey}"] = subvalue
+            else:
+                handle.attrs[f"shock_sampling_{key}"] = value
 
         failure_codes = nonthermal_props.get("gamma_failure_codes", {})
         for name, code in failure_codes.items():
@@ -440,7 +446,7 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
     if logger:
         logger.ai.codepath(
             "HDF5 datasets written",
-            "t,dump_cadence,header,prims,KEL,KEL_SR,UNTH,p,GAMMA_MIN,GAMMA_MIN_FAILURE_CODE,sigma,sigma2,sigma_suppression,RHO2_CODE,PRESS2_CODE,PRESS2_OVER_RHO2,SR_MACH_NORMAL,THETA_BN,H_REL_UPSTREAM,UTILDE_SQ_UPSTREAM,GAMMA_LORENTZ_UPSTREAM,UTILDE_N_UPSTREAM,CFAST_N_UPSTREAM,JUMP_RESIDUAL_LIGHT,PTOT_JUMP,ENTROPY_JUMP,SAMPLE_BOUNDARY_CLIPPED,THETA_E,P_MIN_PHYSICAL",
+            "t,dump_cadence,header,prims,KEL,UNTH,p,GAMMA_MIN,GAMMA_MIN_FAILURE_CODE,sigma,sigma2,sigma_suppression,RHO2_CODE,PRESS2_CODE,PRESS2_OVER_RHO2,SR_MACH_NORMAL,THETA_BN,H_REL_UPSTREAM,UTILDE_SQ_UPSTREAM,GAMMA_LORENTZ_UPSTREAM,UTILDE_N_UPSTREAM,CFAST_N_UPSTREAM,JUMP_RESIDUAL_LIGHT,PTOT_JUMP,ENTROPY_JUMP,SAMPLE_BOUNDARY_CLIPPED,THETA_E,P_MIN_PHYSICAL",
         )
         logger.ai.func_exit("save_h5_file", {"output_h5": output_h5, "grid_shape": [ni, nj, nk]})
 

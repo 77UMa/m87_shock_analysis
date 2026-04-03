@@ -40,16 +40,16 @@ DEFAULT_ROI = {
 
 DEFAULT_SHOCK_PARAMS = {
     "gamma": 4.0 / 3.0,
-    "mach_threshold_loose": 1.05,
-    "min_physical_mach": 1.7,
     "grad_p_filter_quantile": 0.20,
     "march_cells": 6,
-    "enable_sr_refine": True,
+    "compressibility_gate": True,
+    "discontinuity_rel_jump_min": 0.05,
+    "smeared_sr_mach_min": 0.70,
     "sr_mach_min": 1.2,
     "jump_residual_max": 0.4,
 }
 
-DEFAULT_THRESHOLDS = [0.30, 0.40, 0.50, 0.60, 0.80]
+DEFAULT_THRESHOLDS = [0.50, 0.70, 0.90, 1.00]
 
 
 class TimestampedTee:
@@ -145,7 +145,7 @@ def build_threshold_masks(
     sr_mach_min: float,
     jump_residual_max: float,
 ) -> dict[str, np.ndarray]:
-    verified_mask = np.asarray(shock_props["mask"], dtype=bool)
+    verified_mask = np.asarray(shock_props.get("verified_mask", shock_props["mask"]), dtype=bool)
     sr_mach_normal = np.asarray(shock_props["sr_mach_normal"], dtype=float)
     jump_residual_light = np.asarray(shock_props["jump_residual_light"], dtype=float)
     entropy_jump = np.asarray(shock_props["entropy_jump"], dtype=float)
@@ -392,9 +392,16 @@ def write_summary_csv(
 
 
 def log_verified_summary(shock_props: dict) -> None:
-    verified_mask = np.asarray(shock_props["mask"], dtype=bool)
+    verified_mask = np.asarray(shock_props.get("verified_mask", shock_props["mask"]), dtype=bool)
+    gate_stats = shock_props.get("sampling_stats", {}).get("gate_stats", {})
     print(f"debug.verified.count={int(np.sum(verified_mask))}")
+    if gate_stats:
+        print(f"debug.verified.gate.compressibility={gate_stats.get('compressibility_gate', 0)}")
+        print(f"debug.verified.gate.discontinuity={gate_stats.get('discontinuity_gate', 0)}")
+        print(f"debug.verified.gate.smeared_sr_mach={gate_stats.get('smeared_sr_mach_gate', 0)}")
+        print(f"debug.verified.gate.final_candidates={gate_stats.get('final_candidates', 0)}")
     summarize_distribution("debug.verified.sr_mach", np.asarray(shock_props["sr_mach_normal"])[verified_mask])
+    summarize_distribution("debug.verified.mainline_mach", np.asarray(shock_props["mainline_mach"])[shock_props["mask"]])
     summarize_distribution("debug.verified.jump_residual", np.asarray(shock_props["jump_residual_light"])[verified_mask])
     summarize_distribution("debug.verified.theta_bn", np.asarray(shock_props["theta_Bn"])[verified_mask])
 
@@ -456,6 +463,10 @@ def run_debugger(args: argparse.Namespace) -> None:
             print(f"debug.run.log_path={log_path}")
             print(f"debug.run.thresholds={','.join(f'{value:.2f}' for value in thresholds)}")
             print(f"debug.run.sr_mach_min={args.sr_mach_min:.2f}")
+            print(f"debug.run.compressibility_gate={shock_params['compressibility_gate']}")
+            print(f"debug.run.discontinuity_rel_jump_min={shock_params['discontinuity_rel_jump_min']:.2f}")
+            print(f"debug.run.smeared_sr_mach_min={shock_params['smeared_sr_mach_min']:.2f}")
+            print(f"debug.run.march_cells={shock_params['march_cells']}")
             print(f"debug.run.max_points_3d={args.max_points_3d}")
 
             roi_data = load_and_slice_data(str(input_path), roi_params, logger=None)
@@ -465,8 +476,10 @@ def run_debugger(args: argparse.Namespace) -> None:
             shock_props = find_shocks_in_roi_mhd(roi_data, logger=None, **shock_params)
             log_verified_summary(shock_props)
 
-            verified_mask = np.asarray(shock_props["mask"], dtype=bool)
+            verified_mask = np.asarray(shock_props.get("verified_mask", shock_props["mask"]), dtype=bool)
+            accepted_mask = np.asarray(shock_props["mask"], dtype=bool)
             sr_mach_normal = np.asarray(shock_props["sr_mach_normal"], dtype=float)
+            mainline_mach = np.asarray(shock_props["mainline_mach"], dtype=float)
             jump_residual = np.asarray(shock_props["jump_residual_light"], dtype=float)
             theta_bn = np.asarray(shock_props["theta_Bn"], dtype=float)
 
@@ -493,6 +506,14 @@ def run_debugger(args: argparse.Namespace) -> None:
                 "theta_Bn [rad]",
                 f"{snapshot_name} verified jump residual vs theta_Bn",
                 output_dirs["relations"] / f"{snapshot_name}_verified_jump_vs_theta_bn.png",
+            )
+            relation_plot(
+                sr_mach_normal[accepted_mask],
+                mainline_mach[accepted_mask],
+                "sr_mach_normal",
+                "mainline_mach",
+                f"{snapshot_name} accepted SR Mach vs mainline Mach",
+                output_dirs["relations"] / f"{snapshot_name}_accepted_srmach_vs_mainline.png",
             )
 
             summaries: list[ThresholdSummary] = []

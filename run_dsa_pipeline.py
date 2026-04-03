@@ -66,16 +66,14 @@ def create_default_config():
         },
         "shock_params": {
             "gamma": 4.0 / 3.0,
-            "mach_threshold_loose": 1.05,
-            "min_physical_mach": 1.7,
-            "grad_p_filter_quantile": 0.20,
             "march_cells": 6,
+            "compressibility_gate": True,
+            "discontinuity_rel_jump_min": 0.05,
+            "smeared_sr_mach_min": 1.2,
         },
         "shock_sr": {
-            "enable_sr_refine": True,
-            "sr_mach_min": 1.2,
+            "sr_mach_min": 1.7,
             "jump_residual_max": 0.8,
-            "use_sr_refined_mask_for_nt": True,
         },
         "nt_params": {
             "gamma": 4.0 / 3.0,

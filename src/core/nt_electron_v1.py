@@ -22,7 +22,7 @@ def calculate_nonthermal_electrons(
     r_low=1.0,
     r_high=80.0,
     beta_crit=1.0,
-    use_sr_refined_mask=False,
+    use_sr_refined_mask=None,
     logger=None,
 ):
     """Calculate non-thermal electron properties for shock cells."""
@@ -38,12 +38,11 @@ def calculate_nonthermal_electrons(
             {"gamma": gamma, "x_inj": x_inj, "xi_max": xi_max, "sigma_crit": sigma_crit,
              "alpha_sigma": alpha_sigma, "rho_unit": rho_unit, "u_unit": u_unit,
              "r_low": r_low, "r_high": r_high, "beta_crit": beta_crit,
-             "use_sr_refined_mask": use_sr_refined_mask,
              "shock_cells": int(np.sum(shock_properties["mask"]))},
         )
+    if use_sr_refined_mask is not None:
+        raise ValueError('use_sr_refined_mask has been removed; shock_properties["mask"] is already the SRMHD mainline mask.')
     mask = shock_properties["mask"]
-    if use_sr_refined_mask and "mask_sr_refined" in shock_properties:
-        mask = shock_properties["mask_sr_refined"]
     q_grid = np.zeros_like(mask, dtype=float)
     c_grid = np.zeros_like(mask, dtype=float)
     gamma_min_grid = np.ones_like(mask, dtype=float)
@@ -58,7 +57,8 @@ def calculate_nonthermal_electrons(
         c_light = 2.9979e10
         k_b = 1.3806e-16
         mu_i, mu_e, mu_tot, game = 1.0, 1.0, 0.5, 4.0 / 3.0
-        m1 = shock_properties["upstream_mach"][mask]
+        mach_field = shock_properties["mainline_mach"] if "mainline_mach" in shock_properties else shock_properties["upstream_mach"]
+        m1 = mach_field[mask]
         t2 = shock_properties["downstream_temp"][mask]
         n_e2 = shock_properties["downstream_n_e"][mask]
         rho2 = shock_properties.get("rho2_code_grid", np.zeros_like(mask, dtype=float))[mask]
@@ -177,10 +177,10 @@ def calculate_nonthermal_electrons(
             logger.ai.data("nt.gamma_min", gamma_min)
             logger.ai.codepath(
                 "Injection branch",
-                f"legacy empirical interface retained for C_grid/UNTH; mask_source={'mask_sr_refined' if use_sr_refined_mask and 'mask_sr_refined' in shock_properties else 'mask'}",
+                "SRMHD mainline mask used for C_grid/UNTH",
             )
             logger.ai.codepath("Gamma-min branch", "physical downstream thermodynamic interface used for gamma_min_grid")
-        print(f"  legacy injection branch preserved: C median={np.median(n_inj):.3e}, gamma_min median={np.median(gamma_min):.2f}")
+        print(f"  SRMHD mainline injection: C median={np.median(n_inj):.3e}, gamma_min median={np.median(gamma_min):.2f}")
     elif logger:
         logger.ai.codepath("Nonthermal branch", "no shock cells, returned zero grids")
     nonthermal_properties = {"q_grid": q_grid, "C_grid": c_grid, "mask": mask, "sigma_suppression_grid": sigma_suppression_grid, "gamma_min_grid": gamma_min_grid, "gamma_min_grid_physical": gamma_min_grid_physical, "gamma_min_failure_code_grid": gamma_min_failure_code_grid, "theta_e_grid": theta_e_grid, "p_min_physical_grid": p_min_physical_grid, "gamma_failure_codes": gamma_failure_codes}
@@ -196,7 +196,8 @@ def plot_diagnostic_histograms(shock_properties, nonthermal_props, snapshot_name
         print("  No shock cells found. Skipping 1D histograms.")
         return
 
-    m1 = shock_properties["upstream_mach"][mask]
+    mach_field = shock_properties["mainline_mach"] if "mainline_mach" in shock_properties else shock_properties["upstream_mach"]
+    m1 = mach_field[mask]
     q = nonthermal_props["q_grid"][mask]
     c_vals = nonthermal_props["C_grid"][mask]
     log_c = np.log10(c_vals[c_vals > 0])
@@ -243,7 +244,8 @@ def plot_diagnostic_correlations(shock_properties, nonthermal_props, snapshot_na
         print("  No shock cells found. Skipping 2D correlations.")
         return
 
-    m1 = shock_properties["upstream_mach"][mask]
+    mach_field = shock_properties["mainline_mach"] if "mainline_mach" in shock_properties else shock_properties["upstream_mach"]
+    m1 = mach_field[mask]
     q = nonthermal_props["q_grid"][mask]
     c_vals = nonthermal_props["C_grid"][mask]
     log_c = np.log10(c_vals[c_vals > 0])

@@ -3,21 +3,28 @@
 Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77UMa/m87_shock_analysis ，目前正处于分支 feature/sigma-suppression-methodB 的开发中
 子模块 ./ipole-DSA 对应github项目 https://github.com/77UMa/ipole ，目前也处于分支 feature/sigma-suppression-methodB 的开发中
 
-# ⚠️ CRITICAL: Performance Policy
+# ⚠️ CRITICAL: Methodology Computational Physics&SWE
+区别通用软件工程后端开发和我们正在进行的计算物理项目的方法论：
+我正在开发计算天体物理代码，在引入/修正物理时需要区分两种情况。
+## 第一性原理
+第一性原理错误造成的bug属于对大自然的fundamental law的违反，而非企业客户选择A or B方案的体验差距。比如使用经典MHD算法探测了黑洞相对论性喷流中的激波。此时请收起前端开发和微服务架构里的 A/B 测试、容错降级和并行保留旧逻辑的习惯。
+1. 追求物理自洽，如果物理量不合法，必须 Fail Loudly（大声报错）。
+2. 若我们讨论确认了新物理公式的合理性，对于新公式直接替换旧公式，我会用 Git 控制版本，不要在代码里写新旧双链。
+3. 专注于性能和物理正确性。
+## 唯象模型/经验公式
+这类比如我们要引入次网格模型的修正。我们此时的目标不是不是“确立真理”，而是“探索这种效应会如何影响最终的可观测结果”。
+这时可以借鉴通用软件工程，使用模块化隔离，配置驱动探索的方法。
 
-### 1. Think-Before-Acting Protocol (CRITICAL)
+### 1. Think-Before-Acting Protocol 
 - **NO PROACTIVE SCANNING**: 严禁在未经过用户确认前对整个项目进行大规模 Hashing 或文件读取。
-- **DISCUSSION FIRST**: 在执行任何涉及多于 3 个文件的读取、编辑或运行复杂 shell 命令之前，必须先向用户简报你的“分析逻辑”和“预想步骤”。
-- **TOKEN QUOTA AWARENESS**: 意识到 Token 消耗成本。如果任务涉及大数据文件（.hdf5, .dat）或大型子模块（ipole-DSA），优先询问用户是否可以跳过。
 
 ### 2. Context Awareness & Memory
-- **VERIFY STATE**: 每次任务开始时，先运行 `git log -n 1` 确认当前所处的真实 Git 分支和最后提交时间，严禁产生“虚假提交”或“记混历史”的幻觉。
-- **SUBMODULE POLICY**: 除非明确了怀疑对象在ipole的C端，否则严禁扫描 `ipole-DSA/` 内部文件。将其视为黑盒调用。
+- **SUBMODULE POLICY**: 除非明确了怀疑对象在ipole的C端，否则不要扫描 `ipole-DSA/` 内部文件。将其视为黑盒调用。
 
 编辑器崩溃预防: 在使用Diff 补丁模式查找长Python文件信息时，编辑器可能会崩溃，插入大段的空行并对程序产生语义污染。当你评估可能发生或者已经发生这种事情的时候，请立即停止并使用简短的语言描述你的整个调整计划。
 
 ### 3. Execution Rules
-- **LOCAL VS REMOTE**: 区分本地开发环境和远程服务器环境。
+- **LOCAL VS REMOTE**: 区分本地开发环境和远程服务器环境，这意味着不需要跑复杂验证，通过编译测试即可。
 
 
 # Project Info
