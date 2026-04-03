@@ -77,6 +77,16 @@ def process_snapshot(filename, config, logger=None):
         nt_params.setdefault("r_low", physics_cfg.get("r_low", 1.0))
         nt_params.setdefault("r_high", physics_cfg.get("r_high", 80.0))
         nt_params.setdefault("beta_crit", physics_cfg.get("beta_crit", 1.0))
+        shock_sr_cfg = dict(config.get("shock_sr", {}))
+        nt_params["use_sr_refined_mask"] = shock_sr_cfg.get("use_sr_refined_mask_for_nt", False)
+        shock_params = dict(config["shock_params"])
+        shock_params.update(
+            {
+                "enable_sr_refine": shock_sr_cfg.get("enable_sr_refine", True),
+                "sr_mach_min": shock_sr_cfg.get("sr_mach_min", 1.2),
+                "jump_residual_max": shock_sr_cfg.get("jump_residual_max", 0.4),
+            }
+        )
         enable_advection = physics_cfg.get("enable_advection", False)
 
         if dual_logger:
@@ -85,10 +95,24 @@ def process_snapshot(filename, config, logger=None):
                 f"r_low={nt_params['r_low']:.3f}, r_high={nt_params['r_high']:.3f}, beta_crit={nt_params['beta_crit']:.3f}"
             )
             dual_logger.ai.codepath("Physics branch", f"enable_advection={enable_advection}")
+            dual_logger.human.info(
+                "SR refine config: "
+                f"enable_sr_refine={shock_params['enable_sr_refine']}, "
+                f"sr_mach_min={shock_params['sr_mach_min']:.2f}, "
+                f"jump_residual_max={shock_params['jump_residual_max']:.2f}, "
+                f"use_sr_refined_mask_for_nt={nt_params['use_sr_refined_mask']}"
+            )
+            dual_logger.ai.codepath(
+                "SR refine experiment config",
+                f"enable_sr_refine={shock_params['enable_sr_refine']}, "
+                f"sr_mach_min={shock_params['sr_mach_min']:.2f}, "
+                f"jump_residual_max={shock_params['jump_residual_max']:.2f}, "
+                f"use_sr_refined_mask_for_nt={nt_params['use_sr_refined_mask']}",
+            )
 
         shock_props, nonthermal_props = calculate_dsa_physics(
             roi_data,
-            config["shock_params"],
+            shock_params,
             nt_params,
             dual_logger,
         )
@@ -151,19 +175,21 @@ def process_snapshot(filename, config, logger=None):
             dual_logger.human.time("Advection-diffusion", stage_times["advection"])
 
         if dual_logger and np.any(shock_props["mask"]):
-            mask = shock_props["mask"]
+            verified_mask = shock_props["mask"]
+            nt_mask = nonthermal_props.get("mask", verified_mask)
             c_grid = nonthermal_props.get("C_grid", np.array([]))
             q_grid = nonthermal_props.get("q_grid", np.array([]))
             gamma_min_grid = nonthermal_props.get("gamma_min_grid", np.array([]))
             gamma_failure = nonthermal_props.get("gamma_min_failure_code_grid", np.array([]))
             sigma_suppression = nonthermal_props.get("sigma_suppression_grid")
+            nt_mask_name = "mask_sr_refined" if nt_params["use_sr_refined_mask"] else "mask"
 
             if np.size(c_grid) > 0:
-                c_vals = c_grid[mask]
-                q_vals = q_grid[mask]
-                gamma_vals = gamma_min_grid[mask] if np.size(gamma_min_grid) > 0 else np.array([1.0])
-                gamma_failure_vals = gamma_failure[mask] if np.size(gamma_failure) > 0 else np.array([], dtype=int)
-                suppression_vals = sigma_suppression[mask] if sigma_suppression is not None else None
+                c_vals = c_grid[nt_mask]
+                q_vals = q_grid[nt_mask]
+                gamma_vals = gamma_min_grid[nt_mask] if np.size(gamma_min_grid) > 0 else np.array([1.0])
+                gamma_failure_vals = gamma_failure[nt_mask] if np.size(gamma_failure) > 0 else np.array([], dtype=int)
+                suppression_vals = sigma_suppression[nt_mask] if sigma_suppression is not None else None
 
                 dual_logger.human.log_nonthermal_stats(
                     n_inj_total=float(np.sum(c_vals)),
@@ -171,6 +197,10 @@ def process_snapshot(filename, config, logger=None):
                     p_values=q_vals,
                     gamma_min_values=gamma_vals,
                     sigma_suppression=suppression_vals,
+                )
+                dual_logger.human.info(
+                    f"NT injection mask source: {nt_mask_name}; "
+                    f"verified_shocks={int(np.sum(verified_mask))}; nt_active_cells={int(np.sum(nt_mask))}"
                 )
                 dual_logger.human.info(
                     "Branch summary: "
@@ -190,28 +220,39 @@ def process_snapshot(filename, config, logger=None):
                     f"verified={sampling_stats['verified_count']}, "
                     f"accepted_boundary_clipped={sampling_stats['boundary_clipped_verified_count']}"
                 )
+                if shock_params.get("enable_sr_refine", True):
+                    dual_logger.human.info(
+                        "SR refinement summary: "
+                        f"refined={sampling_stats.get('sr_refined_count', 0)}, "
+                        f"rejected_low_mach={sampling_stats.get('sr_rejected_low_mach_count', 0)}, "
+                        f"rejected_jump={sampling_stats.get('sr_rejected_jump_count', 0)}, "
+                        f"rejected_entropy={sampling_stats.get('sr_rejected_entropy_count', 0)}"
+                    )
 
             sigma2_grid = shock_props.get("sigma2_grid")
             if sigma2_grid is not None:
-                dual_logger.ai.data("shock.sigma2.active", sigma2_grid[mask])
+                dual_logger.ai.data("shock.sigma2.active", sigma2_grid[verified_mask])
 
             p2_over_rho2 = shock_props.get("press2_over_rho2_grid")
             if p2_over_rho2 is not None:
-                dual_logger.ai.data("shock.press2_over_rho2.active", p2_over_rho2[mask])
+                dual_logger.ai.data("shock.press2_over_rho2.active", p2_over_rho2[verified_mask])
 
             sample_clipped = shock_props.get("sample_boundary_clipped_grid")
             if sample_clipped is not None:
-                dual_logger.ai.data("shock.sample_boundary_clipped.active", sample_clipped[mask])
+                dual_logger.ai.data("shock.sample_boundary_clipped.active", sample_clipped[verified_mask])
 
             theta_e = nonthermal_props.get("theta_e_grid")
             if theta_e is not None and np.size(theta_e) > 0:
-                dual_logger.ai.data("nonthermal.theta_e.active", theta_e[mask])
+                dual_logger.ai.data("nonthermal.theta_e.active", theta_e[nt_mask])
 
             p_min_phys = nonthermal_props.get("p_min_physical_grid")
             if p_min_phys is not None and np.size(p_min_phys) > 0:
-                dual_logger.ai.data("nonthermal.p_min_physical.active", p_min_phys[mask])
+                dual_logger.ai.data("nonthermal.p_min_physical.active", p_min_phys[nt_mask])
 
-            dual_logger.ai.codepath("Branch split", "legacy UNTH branch and physical gamma_min branch logged separately")
+            dual_logger.ai.codepath(
+                "Branch split",
+                f"legacy UNTH branch and physical gamma_min branch logged separately; nt_mask_source={nt_mask_name}",
+            )
 
 
         step_start = time.time()

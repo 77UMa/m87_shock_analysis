@@ -71,6 +71,12 @@ def create_default_config():
             "grad_p_filter_quantile": 0.20,
             "march_cells": 6,
         },
+        "shock_sr": {
+            "enable_sr_refine": True,
+            "sr_mach_min": 1.2,
+            "jump_residual_max": 0.8,
+            "use_sr_refined_mask_for_nt": True,
+        },
         "nt_params": {
             "gamma": 4.0 / 3.0,
             "x_inj": 3.5,

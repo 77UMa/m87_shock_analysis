@@ -70,7 +70,14 @@ def test_find_shocks_returns_downstream_primitives_and_sampling_diagnostics():
     assert "sample_k2_grid" in shock_props
     assert "sample_boundary_clipped_grid" in shock_props
     assert "sampling_stats" in shock_props
+    assert "mask_sr_refined" in shock_props
+    assert "sr_mach_normal" in shock_props
+    assert "theta_Bn" in shock_props
+    assert "jump_residual_light" in shock_props
     assert shock_props["mask"].any()
+    assert "utilde_sq_upstream" in shock_props
+    assert "gamma_lorentz_upstream" in shock_props
+    assert "utilde_n_upstream" in shock_props
 
 
 def test_gamma_min_uses_physical_downstream_branch_not_legacy_downstream_temp():
@@ -97,6 +104,34 @@ def test_gamma_min_uses_physical_downstream_branch_not_legacy_downstream_temp():
     assert result["gamma_min_failure_code_grid"][0, 0, 0] == 0
 
 
+def test_nonthermal_can_switch_to_sr_refined_mask_without_changing_legacy_interfaces():
+    mask = np.ones((1, 1, 2), dtype=bool)
+    mask_sr_refined = np.zeros_like(mask)
+    mask_sr_refined[0, 0, 1] = True
+    shock_properties = {
+        "mask": mask,
+        "mask_sr_refined": mask_sr_refined,
+        "upstream_mach": np.full((1, 1, 2), 3.0),
+        "downstream_temp": np.full((1, 1, 2), 1.0e8),
+        "downstream_n_e": np.full((1, 1, 2), 10.0),
+        "rho2_code_grid": np.full((1, 1, 2), 2.0),
+        "press2_code_grid": np.full((1, 1, 2), 4.0),
+        "press2_over_rho2_grid": np.full((1, 1, 2), 2.0),
+        "beta2_grid": np.full((1, 1, 2), 1.0),
+        "sample_boundary_clipped_grid": np.zeros((1, 1, 2), dtype=bool),
+    }
+
+    result = calculate_nonthermal_electrons(
+        shock_properties,
+        use_sr_refined_mask=True,
+    )
+
+    assert np.array_equal(result["mask"], mask_sr_refined)
+    assert result["C_grid"][0, 0, 0] == 0.0
+    assert result["gamma_min_grid"][0, 0, 0] == 1.0
+    assert result["gamma_min_grid"][0, 0, 1] > 1.0
+
+
 @pytest.mark.skipif(h5py is None, reason="h5py not installed")
 def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
     roi_data = _build_minimal_roi()
@@ -105,6 +140,19 @@ def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
     shock_props = {
         "mask": mask,
         "upstream_mach": np.ones_like(roi_data["rho"]),
+        "mask_sr_refined": mask.copy(),
+        "sr_mach_normal": np.ones_like(roi_data["rho"]) * 1.5,
+        "theta_Bn": np.zeros_like(roi_data["rho"]),
+        "h_rel_upstream": np.ones_like(roi_data["rho"]),
+        "cfast_n_upstream": np.ones_like(roi_data["rho"]) * 0.5,
+        "utilde_sq_upstream": np.ones_like(roi_data["rho"]) * 3.0,
+        "gamma_lorentz_upstream": np.ones_like(roi_data["rho"]) * 2.0,
+        "utilde_n_upstream": np.ones_like(roi_data["rho"]) * 1.5,
+        "jump_residual_light": np.zeros_like(roi_data["rho"]),
+        "ptot_jump": np.ones_like(roi_data["rho"]),
+        "entropy_jump": np.ones_like(roi_data["rho"]),
+        "v_n_upstream": np.ones_like(roi_data["rho"]) * 1.5,
+        "u_n_upstream": np.ones_like(roi_data["rho"]) * 1.5,
     }
     nonthermal_props = {
         "C_grid": np.zeros_like(roi_data["rho"]),
@@ -126,5 +174,19 @@ def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
         save_h5_file(str(output_h5), roi_data, shock_props, nonthermal_props, config)
         with h5py.File(output_h5, "r") as handle:
             gamma_min = handle["GAMMA_MIN"][:]
+            assert "KEL_SR" in handle
+            assert "SR_MACH_NORMAL" in handle
+            assert "THETA_BN" in handle
+            assert "H_REL_UPSTREAM" in handle
+            assert "CFAST_N_UPSTREAM" in handle
+            assert "JUMP_RESIDUAL_LIGHT" in handle
+            assert "PTOT_JUMP" in handle
+            assert "ENTROPY_JUMP" in handle
+            assert "UTILDE_SQ_UPSTREAM" in handle
+            assert "GAMMA_LORENTZ_UPSTREAM" in handle
+            assert "UTILDE_N_UPSTREAM" in handle
+            assert np.isclose(handle["UTILDE_SQ_UPSTREAM"][3, 1, 0], 3.0)
+            assert np.isclose(handle["GAMMA_LORENTZ_UPSTREAM"][3, 1, 0], 2.0)
+            assert np.isclose(handle["UTILDE_N_UPSTREAM"][3, 1, 0], 1.5)
 
     assert np.isclose(gamma_min[3, 1, 0], 4.2)

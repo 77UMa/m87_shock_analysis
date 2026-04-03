@@ -22,6 +22,7 @@ def calculate_nonthermal_electrons(
     r_low=1.0,
     r_high=80.0,
     beta_crit=1.0,
+    use_sr_refined_mask=False,
     logger=None,
 ):
     """Calculate non-thermal electron properties for shock cells."""
@@ -37,9 +38,12 @@ def calculate_nonthermal_electrons(
             {"gamma": gamma, "x_inj": x_inj, "xi_max": xi_max, "sigma_crit": sigma_crit,
              "alpha_sigma": alpha_sigma, "rho_unit": rho_unit, "u_unit": u_unit,
              "r_low": r_low, "r_high": r_high, "beta_crit": beta_crit,
+             "use_sr_refined_mask": use_sr_refined_mask,
              "shock_cells": int(np.sum(shock_properties["mask"]))},
         )
     mask = shock_properties["mask"]
+    if use_sr_refined_mask and "mask_sr_refined" in shock_properties:
+        mask = shock_properties["mask_sr_refined"]
     q_grid = np.zeros_like(mask, dtype=float)
     c_grid = np.zeros_like(mask, dtype=float)
     gamma_min_grid = np.ones_like(mask, dtype=float)
@@ -171,7 +175,10 @@ def calculate_nonthermal_electrons(
         if logger:
             logger.ai.data("nt.N_inj", n_inj)
             logger.ai.data("nt.gamma_min", gamma_min)
-            logger.ai.codepath("Injection branch", "legacy empirical interface retained for C_grid/UNTH")
+            logger.ai.codepath(
+                "Injection branch",
+                f"legacy empirical interface retained for C_grid/UNTH; mask_source={'mask_sr_refined' if use_sr_refined_mask and 'mask_sr_refined' in shock_properties else 'mask'}",
+            )
             logger.ai.codepath("Gamma-min branch", "physical downstream thermodynamic interface used for gamma_min_grid")
         print(f"  legacy injection branch preserved: C median={np.median(n_inj):.3e}, gamma_min median={np.median(gamma_min):.2f}")
     elif logger:
