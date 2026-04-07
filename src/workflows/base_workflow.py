@@ -121,9 +121,22 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
     _human_info(logger, "Calculating shock properties")
     nt_params = dict(nt_params)
     deprecated_temp_fraction = nt_params.pop("electron_temp_fraction", None)
-    nt_params.setdefault("r_low", 1.0)
-    nt_params.setdefault("r_high", 80.0)
-    nt_params.setdefault("beta_crit", 1.0)
+    removed_nt_controls = [key for key in ("r_low", "r_high", "beta_crit") if key in nt_params]
+    if removed_nt_controls:
+        raise ValueError(
+            "Removed beta-closure controls detected: "
+            + ", ".join(removed_nt_controls)
+            + ". Two-temperature Sironi-Tran heating is now the only active electron-heating chain."
+        )
+    nt_params.setdefault("sironi_tran_coeff", 0.0016)
+    nt_params.setdefault("sironi_tran_exp", 3.6)
+    nt_params.setdefault("sironi_tran_delta_max", 3.0)
+    nt_params.setdefault("eta_inj_e0", 1.0e-3)
+    nt_params.setdefault("eps_nth_e0", 3.0e-3)
+    nt_params.setdefault("theta_bn_quench", 50.0)
+    nt_params.setdefault("theta_bn_width", 10.0)
+    nt_params.setdefault("sonic_mach_inj_min", 1.5)
+    nt_params.setdefault("inj_model", "pic_dual_cap")
     if logger:
         logger.ai.func_enter(
             "calculate_dsa_physics",
@@ -132,7 +145,7 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
         if deprecated_temp_fraction is not None:
             logger.ai.codepath(
                 "NT parameter migration",
-                "deprecated electron_temp_fraction ignored; using r_low/r_high/beta_crit closure",
+                "deprecated electron_temp_fraction ignored; using two-temperature Sironi-Tran heating",
             )
 
     shock_props = find_shocks_in_roi_mhd(roi_data, logger=logger, **shock_params)
@@ -163,6 +176,7 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
             logger.ai.codepath("No shock branch", "calculate_nonthermal_electrons skipped")
         nonthermal_props = {
             "q_grid": np.zeros_like(roi_data["rho"]),
+            "unth_code_grid": np.zeros_like(roi_data["rho"]),
             "C_grid": np.zeros_like(roi_data["rho"]),
             "mask": shock_props["mask"],
             "sigma_suppression_grid": np.ones_like(roi_data["rho"]),
@@ -170,18 +184,51 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
             "gamma_min_grid_physical": np.ones_like(roi_data["rho"]),
             "gamma_min_failure_code_grid": np.zeros_like(roi_data["rho"], dtype=np.int16),
             "theta_e_grid": np.zeros_like(roi_data["rho"]),
+            "theta_e1_grid": np.zeros_like(roi_data["rho"]),
+            "theta_e2_ad_grid": np.zeros_like(roi_data["rho"]),
+            "sironi_boost_grid": np.ones_like(roi_data["rho"]),
+            "R1_grid": np.zeros_like(roi_data["rho"]),
+            "Te2_grid": np.zeros_like(roi_data["rho"]),
             "p_min_physical_grid": np.zeros_like(roi_data["rho"]),
+            "eta_inj_e_grid": np.zeros_like(roi_data["rho"]),
+            "eps_nth_e_grid": np.zeros_like(roi_data["rho"]),
+            "e_diss_e_grid": np.zeros_like(roi_data["rho"]),
+            "inj_gate_grid": np.zeros_like(roi_data["rho"]),
+            "n_nth_eta_phys_grid": np.zeros_like(roi_data["rho"]),
+            "n_nth_eps_phys_grid": np.zeros_like(roi_data["rho"]),
+            "n_nth_phys_grid": np.zeros_like(roi_data["rho"]),
+            "spectral_norm_eta_grid": np.zeros_like(roi_data["rho"]),
+            "spectral_norm_eps_grid": np.zeros_like(roi_data["rho"]),
+            "c_eta_grid": np.zeros_like(roi_data["rho"]),
+            "c_eps_grid": np.zeros_like(roi_data["rho"]),
+            "inj_limit_mode_grid": np.zeros_like(roi_data["rho"], dtype=np.int16),
+            "inj_limit_modes": {
+                "none": 0,
+                "eta_cap": 1,
+                "eps_cap": 2,
+                "quenched_by_gate": 3,
+                "invalid_or_boundary": 4,
+            },
             "gamma_failure_codes": {
                 "ok": 0,
-                "press2_nonpositive": 1,
-                "rho2_nonpositive": 2,
-                "boundary_clipped": 3,
-                "temperature_invalid": 4,
-                "gamma_min_le_one": 5,
+                "press1_nonpositive": 1,
+                "rho1_nonpositive": 2,
+                "press2_nonpositive": 3,
+                "rho2_nonpositive": 4,
+                "beta1_invalid": 5,
+                "sonic_mach_invalid": 6,
+                "boundary_clipped": 7,
+                "theta_e1_invalid": 8,
+                "theta_e2_invalid": 9,
+                "gamma_min_le_one": 10,
             },
         }
 
         shock_defaults = {
+            "rho1_code_grid": np.zeros_like(roi_data["rho"]),
+            "press1_code_grid": np.zeros_like(roi_data["rho"]),
+            "bsq1_code_grid": np.zeros_like(roi_data["rho"]),
+            "beta1_grid": np.zeros_like(roi_data["rho"]),
             "rho2_code_grid": np.zeros_like(roi_data["rho"]),
             "press2_code_grid": np.zeros_like(roi_data["rho"]),
             "press2_over_rho2_grid": np.zeros_like(roi_data["rho"]),
@@ -195,6 +242,7 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
             "u_n_upstream": np.zeros_like(roi_data["rho"]),
             "theta_Bn": np.zeros_like(roi_data["rho"]),
             "cfast_n_upstream": np.zeros_like(roi_data["rho"]),
+            "sr_sonic_mach": np.zeros_like(roi_data["rho"]),
             "sr_mach_normal": np.zeros_like(roi_data["rho"]),
             "ptot_jump": np.zeros_like(roi_data["rho"]),
             "entropy_jump": np.zeros_like(roi_data["rho"]),
@@ -218,7 +266,7 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
             shock_props.setdefault(key, value)
 
         if logger:
-            logger.ai.codepath("No shock branch", "initialized split gamma_min diagnostics to defaults")
+            logger.ai.codepath("No shock branch", "initialized two-temperature diagnostics to defaults")
 
     if logger:
         logger.ai.func_exit(
@@ -236,6 +284,8 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
     if logger:
         logger.ai.func_enter("save_h5_file", {"output_h5": output_h5})
     _human_info(logger, f"Saving HDF5 to {os.path.basename(output_h5)}")
+    hdf5_options = config.get("hdf5_options", {})
+    include_3d_diagnostics = bool(hdf5_options.get("include_3d_diagnostics", False))
 
     gamma = config["shock_params"]["gamma"]
     spin = config["physics"]["spin"]
@@ -300,7 +350,7 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
         handle.create_dataset("prims", data=prims.transpose(2, 1, 0, 3).astype("f4"))
 
         mask = shock_props["mask"]
-        c_grid = nonthermal_props.get("C_grid", np.zeros_like(rho))
+        c_grid = nonthermal_props.get("unth_code_grid", nonthermal_props.get("C_grid", np.zeros_like(rho)))
         q_grid = nonthermal_props.get("q_grid", np.zeros_like(rho))
         gamma_min_grid = nonthermal_props.get("gamma_min_grid", np.ones_like(rho))
         gamma_failure_grid = nonthermal_props.get("gamma_min_failure_code_grid", np.zeros_like(rho, dtype=np.int16))
@@ -342,75 +392,126 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
         handle.create_dataset("p", data=p_grid.transpose(2, 1, 0).astype("f8"))
         handle.create_dataset("GAMMA_MIN", data=gamma_min_grid.transpose(2, 1, 0).astype("f8"))
         handle.create_dataset("GAMMA_MIN_FAILURE_CODE", data=gamma_failure_grid.transpose(2, 1, 0).astype("i2"))
-
-        if "sigma_grid" in shock_props:
-            handle.create_dataset("sigma", data=shock_props["sigma_grid"].transpose(2, 1, 0).astype("f4"))
-        if "sigma2_grid" in shock_props:
-            handle.create_dataset("sigma2", data=shock_props["sigma2_grid"].transpose(2, 1, 0).astype("f4"))
-        if "sigma_suppression_grid" in nonthermal_props:
-            handle.create_dataset(
-                "sigma_suppression",
-                data=nonthermal_props["sigma_suppression_grid"].transpose(2, 1, 0).astype("f4"),
-            )
-        if "rho2_code_grid" in shock_props:
-            handle.create_dataset("RHO2_CODE", data=shock_props["rho2_code_grid"].transpose(2, 1, 0).astype("f8"))
-        if "press2_code_grid" in shock_props:
-            handle.create_dataset("PRESS2_CODE", data=shock_props["press2_code_grid"].transpose(2, 1, 0).astype("f8"))
-        if "press2_over_rho2_grid" in shock_props:
-            handle.create_dataset(
-                "PRESS2_OVER_RHO2",
-                data=shock_props["press2_over_rho2_grid"].transpose(2, 1, 0).astype("f8"),
-            )
-        if "sr_mach_normal" in shock_props:
-            handle.create_dataset("SR_MACH_NORMAL", data=shock_props["sr_mach_normal"].transpose(2, 1, 0).astype("f8"))
-        if "theta_Bn" in shock_props:
-            handle.create_dataset("THETA_BN", data=shock_props["theta_Bn"].transpose(2, 1, 0).astype("f8"))
-        if "h_rel_upstream" in shock_props:
-            handle.create_dataset("H_REL_UPSTREAM", data=shock_props["h_rel_upstream"].transpose(2, 1, 0).astype("f8"))
-        if "utilde_sq_upstream" in shock_props:
-            handle.create_dataset(
-                "UTILDE_SQ_UPSTREAM",
-                data=shock_props["utilde_sq_upstream"].transpose(2, 1, 0).astype("f8"),
-            )
-        if "gamma_lorentz_upstream" in shock_props:
-            handle.create_dataset(
-                "GAMMA_LORENTZ_UPSTREAM",
-                data=shock_props["gamma_lorentz_upstream"].transpose(2, 1, 0).astype("f8"),
-            )
-        if "utilde_n_upstream" in shock_props:
-            handle.create_dataset(
-                "UTILDE_N_UPSTREAM",
-                data=shock_props["utilde_n_upstream"].transpose(2, 1, 0).astype("f8"),
-            )
-        if "cfast_n_upstream" in shock_props:
-            handle.create_dataset(
-                "CFAST_N_UPSTREAM",
-                data=shock_props["cfast_n_upstream"].transpose(2, 1, 0).astype("f8"),
-            )
-        if "jump_residual_light" in shock_props:
-            handle.create_dataset(
-                "JUMP_RESIDUAL_LIGHT",
-                data=shock_props["jump_residual_light"].transpose(2, 1, 0).astype("f8"),
-            )
-        if "ptot_jump" in shock_props:
-            handle.create_dataset("PTOT_JUMP", data=shock_props["ptot_jump"].transpose(2, 1, 0).astype("f8"))
-        if "entropy_jump" in shock_props:
-            handle.create_dataset(
-                "ENTROPY_JUMP",
-                data=shock_props["entropy_jump"].transpose(2, 1, 0).astype("f8"),
-            )
-        if "sample_boundary_clipped_grid" in shock_props:
-            handle.create_dataset(
-                "SAMPLE_BOUNDARY_CLIPPED",
-                data=shock_props["sample_boundary_clipped_grid"].transpose(2, 1, 0).astype("i1"),
-            )
-        if "theta_e_grid" in nonthermal_props:
-            handle.create_dataset("THETA_E", data=nonthermal_props["theta_e_grid"].transpose(2, 1, 0).astype("f8"))
-        if "p_min_physical_grid" in nonthermal_props:
-            handle.create_dataset(
-                "P_MIN_PHYSICAL",
-                data=nonthermal_props["p_min_physical_grid"].transpose(2, 1, 0).astype("f8"),
-            )
+        if include_3d_diagnostics:
+            if "sigma_grid" in shock_props:
+                handle.create_dataset("sigma", data=shock_props["sigma_grid"].transpose(2, 1, 0).astype("f4"))
+            if "sigma2_grid" in shock_props:
+                handle.create_dataset("sigma2", data=shock_props["sigma2_grid"].transpose(2, 1, 0).astype("f4"))
+            if "sigma_suppression_grid" in nonthermal_props:
+                handle.create_dataset(
+                    "sigma_suppression",
+                    data=nonthermal_props["sigma_suppression_grid"].transpose(2, 1, 0).astype("f4"),
+                )
+            if "rho2_code_grid" in shock_props:
+                handle.create_dataset("RHO2_CODE", data=shock_props["rho2_code_grid"].transpose(2, 1, 0).astype("f8"))
+            if "rho1_code_grid" in shock_props:
+                handle.create_dataset("RHO1_CODE", data=shock_props["rho1_code_grid"].transpose(2, 1, 0).astype("f8"))
+            if "press1_code_grid" in shock_props:
+                handle.create_dataset("PRESS1_CODE", data=shock_props["press1_code_grid"].transpose(2, 1, 0).astype("f8"))
+            if "beta1_grid" in shock_props:
+                handle.create_dataset("BETA1", data=shock_props["beta1_grid"].transpose(2, 1, 0).astype("f8"))
+            if "press2_code_grid" in shock_props:
+                handle.create_dataset("PRESS2_CODE", data=shock_props["press2_code_grid"].transpose(2, 1, 0).astype("f8"))
+            if "press2_over_rho2_grid" in shock_props:
+                handle.create_dataset(
+                    "PRESS2_OVER_RHO2",
+                    data=shock_props["press2_over_rho2_grid"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "sr_mach_normal" in shock_props:
+                handle.create_dataset("SR_MACH_NORMAL", data=shock_props["sr_mach_normal"].transpose(2, 1, 0).astype("f8"))
+            if "sr_sonic_mach" in shock_props:
+                handle.create_dataset("SONIC_MACH", data=shock_props["sr_sonic_mach"].transpose(2, 1, 0).astype("f8"))
+            if "theta_Bn" in shock_props:
+                handle.create_dataset("THETA_BN", data=shock_props["theta_Bn"].transpose(2, 1, 0).astype("f8"))
+            if "h_rel_upstream" in shock_props:
+                handle.create_dataset("H_REL_UPSTREAM", data=shock_props["h_rel_upstream"].transpose(2, 1, 0).astype("f8"))
+            if "utilde_sq_upstream" in shock_props:
+                handle.create_dataset(
+                    "UTILDE_SQ_UPSTREAM",
+                    data=shock_props["utilde_sq_upstream"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "gamma_lorentz_upstream" in shock_props:
+                handle.create_dataset(
+                    "GAMMA_LORENTZ_UPSTREAM",
+                    data=shock_props["gamma_lorentz_upstream"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "utilde_n_upstream" in shock_props:
+                handle.create_dataset(
+                    "UTILDE_N_UPSTREAM",
+                    data=shock_props["utilde_n_upstream"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "cfast_n_upstream" in shock_props:
+                handle.create_dataset(
+                    "CFAST_N_UPSTREAM",
+                    data=shock_props["cfast_n_upstream"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "jump_residual_light" in shock_props:
+                handle.create_dataset(
+                    "JUMP_RESIDUAL_LIGHT",
+                    data=shock_props["jump_residual_light"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "ptot_jump" in shock_props:
+                handle.create_dataset("PTOT_JUMP", data=shock_props["ptot_jump"].transpose(2, 1, 0).astype("f8"))
+            if "entropy_jump" in shock_props:
+                handle.create_dataset(
+                    "ENTROPY_JUMP",
+                    data=shock_props["entropy_jump"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "sample_boundary_clipped_grid" in shock_props:
+                handle.create_dataset(
+                    "SAMPLE_BOUNDARY_CLIPPED",
+                    data=shock_props["sample_boundary_clipped_grid"].transpose(2, 1, 0).astype("i1"),
+                )
+            if "theta_e_grid" in nonthermal_props:
+                handle.create_dataset("THETA_E", data=nonthermal_props["theta_e_grid"].transpose(2, 1, 0).astype("f8"))
+            if "theta_e1_grid" in nonthermal_props:
+                handle.create_dataset("THETA_E1", data=nonthermal_props["theta_e1_grid"].transpose(2, 1, 0).astype("f8"))
+            if "theta_e2_ad_grid" in nonthermal_props:
+                handle.create_dataset("THETA_E2_AD", data=nonthermal_props["theta_e2_ad_grid"].transpose(2, 1, 0).astype("f8"))
+            if "sironi_boost_grid" in nonthermal_props:
+                handle.create_dataset("SIRONI_BOOST", data=nonthermal_props["sironi_boost_grid"].transpose(2, 1, 0).astype("f8"))
+            if "R1_grid" in nonthermal_props:
+                handle.create_dataset("R1", data=nonthermal_props["R1_grid"].transpose(2, 1, 0).astype("f8"))
+            if "Te2_grid" in nonthermal_props:
+                handle.create_dataset("TE2", data=nonthermal_props["Te2_grid"].transpose(2, 1, 0).astype("f8"))
+            if "p_min_physical_grid" in nonthermal_props:
+                handle.create_dataset(
+                    "P_MIN_PHYSICAL",
+                    data=nonthermal_props["p_min_physical_grid"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "eta_inj_e_grid" in nonthermal_props:
+                handle.create_dataset("ETA_INJ_E", data=nonthermal_props["eta_inj_e_grid"].transpose(2, 1, 0).astype("f8"))
+            if "eps_nth_e_grid" in nonthermal_props:
+                handle.create_dataset("EPS_NTH_E", data=nonthermal_props["eps_nth_e_grid"].transpose(2, 1, 0).astype("f8"))
+            if "e_diss_e_grid" in nonthermal_props:
+                handle.create_dataset("E_DISS_E", data=nonthermal_props["e_diss_e_grid"].transpose(2, 1, 0).astype("f8"))
+            if "inj_gate_grid" in nonthermal_props:
+                handle.create_dataset("INJ_GATE", data=nonthermal_props["inj_gate_grid"].transpose(2, 1, 0).astype("f8"))
+            if "n_nth_eta_phys_grid" in nonthermal_props:
+                handle.create_dataset("N_NTH_ETA", data=nonthermal_props["n_nth_eta_phys_grid"].transpose(2, 1, 0).astype("f8"))
+            if "n_nth_eps_phys_grid" in nonthermal_props:
+                handle.create_dataset("N_NTH_EPS", data=nonthermal_props["n_nth_eps_phys_grid"].transpose(2, 1, 0).astype("f8"))
+            if "n_nth_phys_grid" in nonthermal_props:
+                handle.create_dataset("N_NTH", data=nonthermal_props["n_nth_phys_grid"].transpose(2, 1, 0).astype("f8"))
+            if "spectral_norm_eta_grid" in nonthermal_props:
+                handle.create_dataset(
+                    "PL_NORM_ETA",
+                    data=nonthermal_props["spectral_norm_eta_grid"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "spectral_norm_eps_grid" in nonthermal_props:
+                handle.create_dataset(
+                    "PL_NORM_EPS",
+                    data=nonthermal_props["spectral_norm_eps_grid"].transpose(2, 1, 0).astype("f8"),
+                )
+            if "c_eta_grid" in nonthermal_props:
+                handle.create_dataset("C_ETA", data=nonthermal_props["c_eta_grid"].transpose(2, 1, 0).astype("f8"))
+            if "c_eps_grid" in nonthermal_props:
+                handle.create_dataset("C_EPS", data=nonthermal_props["c_eps_grid"].transpose(2, 1, 0).astype("f8"))
+            if "inj_limit_mode_grid" in nonthermal_props:
+                handle.create_dataset(
+                    "INJ_LIMIT_MODE",
+                    data=nonthermal_props["inj_limit_mode_grid"].transpose(2, 1, 0).astype("i2"),
+                )
 
         handle.attrs["gamma_min_shock_min"] = gamma_stats["min"]
         handle.attrs["gamma_min_shock_median"] = gamma_stats["median"]
@@ -429,11 +530,19 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
         failure_codes = nonthermal_props.get("gamma_failure_codes", {})
         for name, code in failure_codes.items():
             handle.attrs[f"gamma_failure_code_{name}"] = code
+        injection_modes = nonthermal_props.get("inj_limit_modes", {})
+        for name, code in injection_modes.items():
+            handle.attrs[f"inj_limit_mode_{name}"] = code
 
         if np.any(mask):
             unique_codes, unique_counts = np.unique(gamma_failure_grid[mask], return_counts=True)
             for code, count in zip(unique_codes, unique_counts):
                 handle.attrs[f"gamma_failure_count_{int(code)}"] = int(count)
+            inj_limit_grid = nonthermal_props.get("inj_limit_mode_grid")
+            if inj_limit_grid is not None:
+                unique_codes, unique_counts = np.unique(inj_limit_grid[mask], return_counts=True)
+                for code, count in zip(unique_codes, unique_counts):
+                    handle.attrs[f"inj_limit_count_{int(code)}"] = int(count)
 
         if logger:
             logger.ai.data("save.gamma_min.active", shock_gamma_vals if shock_gamma_vals.size else np.array([1.0]))
@@ -441,13 +550,22 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
                 "save.gamma_failure_code.active",
                 gamma_failure_grid[mask] if np.any(mask) else np.array([0], dtype=np.int16),
             )
-            logger.ai.codepath("Gamma-min export", f"fallback risk count={fallback_risk_count}")
+            logger.ai.codepath(
+                "Gamma-min export",
+                f"fallback risk count={fallback_risk_count}, include_3d_diagnostics={include_3d_diagnostics}",
+            )
 
     if logger:
-        logger.ai.codepath(
-            "HDF5 datasets written",
-            "t,dump_cadence,header,prims,KEL,UNTH,p,GAMMA_MIN,GAMMA_MIN_FAILURE_CODE,sigma,sigma2,sigma_suppression,RHO2_CODE,PRESS2_CODE,PRESS2_OVER_RHO2,SR_MACH_NORMAL,THETA_BN,H_REL_UPSTREAM,UTILDE_SQ_UPSTREAM,GAMMA_LORENTZ_UPSTREAM,UTILDE_N_UPSTREAM,CFAST_N_UPSTREAM,JUMP_RESIDUAL_LIGHT,PTOT_JUMP,ENTROPY_JUMP,SAMPLE_BOUNDARY_CLIPPED,THETA_E,P_MIN_PHYSICAL",
-        )
+        if include_3d_diagnostics:
+            logger.ai.codepath(
+                "HDF5 datasets written",
+                "t,dump_cadence,header,prims,KEL,UNTH,p,GAMMA_MIN,GAMMA_MIN_FAILURE_CODE plus full 3D diagnostics",
+            )
+        else:
+            logger.ai.codepath(
+                "HDF5 datasets written",
+                "t,dump_cadence,header,prims,KEL,UNTH,p,GAMMA_MIN,GAMMA_MIN_FAILURE_CODE only",
+            )
         logger.ai.func_exit("save_h5_file", {"output_h5": output_h5, "grid_shape": [ni, nj, nk]})
 
     return gamma_stats

@@ -64,6 +64,9 @@ def test_find_shocks_returns_downstream_primitives_and_sampling_diagnostics():
 
     assert "rho2_code_grid" in shock_props
     assert "press2_code_grid" in shock_props
+    assert "rho1_code_grid" in shock_props
+    assert "press1_code_grid" in shock_props
+    assert "beta1_grid" in shock_props
     assert "press2_over_rho2_grid" in shock_props
     assert "sample_i2_grid" in shock_props
     assert "sample_j2_grid" in shock_props
@@ -72,6 +75,7 @@ def test_find_shocks_returns_downstream_primitives_and_sampling_diagnostics():
     assert "sampling_stats" in shock_props
     assert "verified_mask" in shock_props
     assert "sr_mach_normal" in shock_props
+    assert "sr_sonic_mach" in shock_props
     assert "theta_Bn" in shock_props
     assert "jump_residual_light" in shock_props
     assert shock_props["mask"].any()
@@ -80,6 +84,8 @@ def test_find_shocks_returns_downstream_primitives_and_sampling_diagnostics():
     assert "utilde_sq_upstream" in shock_props
     assert "gamma_lorentz_upstream" in shock_props
     assert "utilde_n_upstream" in shock_props
+    active = shock_props["mask"]
+    assert np.all(shock_props["sr_sonic_mach"][active] > 0)
 
 
 def test_find_shocks_rejects_removed_classical_candidate_controls():
@@ -158,6 +164,9 @@ def test_run_pipeline_default_config_omits_removed_classical_candidate_controls(
     assert "mach_threshold_loose" not in config["shock_params"]
     assert "min_physical_mach" not in config["shock_params"]
     assert set(config["shock_params"].keys()) == {"gamma", "grad_p_filter_quantile", "march_cells"}
+    assert config["nt_params"]["inj_model"] == "pic_dual_cap"
+    assert config["nt_params"]["eta_inj_e0"] == pytest.approx(1.0e-3)
+    assert config["nt_params"]["eps_nth_e0"] == pytest.approx(3.0e-3)
 
 
 def test_process_snapshot_rejects_removed_classical_candidate_controls_in_config():
@@ -181,17 +190,18 @@ def test_process_snapshot_rejects_removed_classical_candidate_controls_in_config
     assert process_snapshot("dummy.athdf", config, logger=None) is False
 
 
-def test_gamma_min_uses_physical_downstream_branch_not_legacy_downstream_temp():
+def test_two_temp_chain_uses_upstream_beta_and_sonic_mach():
     mask = np.zeros((1, 1, 1), dtype=bool)
     mask[0, 0, 0] = True
     shock_properties = {
         "mask": mask,
-        "upstream_mach": np.full((1, 1, 1), 3.0),
-        "downstream_temp": np.full((1, 1, 1), 1.0e-12),
-        "downstream_n_e": np.full((1, 1, 1), 1.0),
+        "mainline_mach": np.full((1, 1, 1), 3.0),
+        "rho1_code_grid": np.full((1, 1, 1), 2.0),
+        "press1_code_grid": np.full((1, 1, 1), 1.0),
+        "beta1_grid": np.full((1, 1, 1), 2.0),
+        "sr_sonic_mach": np.full((1, 1, 1), 4.0),
         "rho2_code_grid": np.full((1, 1, 1), 2.0),
         "press2_code_grid": np.full((1, 1, 1), 4.0),
-        "press2_over_rho2_grid": np.full((1, 1, 1), 2.0),
         "sample_boundary_clipped_grid": np.zeros((1, 1, 1), dtype=bool),
     }
 
@@ -201,21 +211,89 @@ def test_gamma_min_uses_physical_downstream_branch_not_legacy_downstream_temp():
         u_unit=18.0,
     )
 
-    assert result["gamma_min_grid"][0, 0, 0] > 1.0
+    beta1 = 2.0
+    r1 = 80.0 * beta1**2 / (1.0 + beta1**2) + 1.0 / (1.0 + beta1**2)
+    theta_e1 = (1.0 / 2.0) * (1.6726e-24 / 9.1094e-28) / (1.0 + r1)
+    theta_e2_ad = theta_e1
+    theta_e2 = theta_e2_ad * (1.0 + 0.0016 * 4.0**3.6)
+    assert np.isclose(result["R1_grid"][0, 0, 0], r1)
+    assert np.isclose(result["theta_e1_grid"][0, 0, 0], theta_e1)
+    assert np.isclose(result["theta_e2_ad_grid"][0, 0, 0], theta_e2_ad)
+    assert np.isclose(result["theta_e_grid"][0, 0, 0], theta_e2)
+    assert np.isclose(result["gamma_min_grid"][0, 0, 0], 1.0 + 3.0 * theta_e2)
     assert result["gamma_min_failure_code_grid"][0, 0, 0] == 0
+    assert result["C_grid"][0, 0, 0] >= 0.0
+
+
+def test_pic_dual_cap_injection_quenches_without_irreversible_heating():
+    mask = np.ones((1, 1, 1), dtype=bool)
+    shock_properties = {
+        "mask": mask,
+        "mainline_mach": np.full((1, 1, 1), 3.0),
+        "rho1_code_grid": np.full((1, 1, 1), 2.0),
+        "press1_code_grid": np.full((1, 1, 1), 1.0),
+        "beta1_grid": np.full((1, 1, 1), 1.0),
+        "sr_sonic_mach": np.full((1, 1, 1), 4.0),
+        "theta_Bn": np.zeros((1, 1, 1)),
+        "rho2_code_grid": np.full((1, 1, 1), 2.0),
+        "press2_code_grid": np.full((1, 1, 1), 1.0),
+        "sample_boundary_clipped_grid": np.zeros((1, 1, 1), dtype=bool),
+        "sigma_grid": np.zeros((1, 1, 1)),
+    }
+
+    result = calculate_nonthermal_electrons(shock_properties)
+
+    assert result["theta_e_grid"][0, 0, 0] == pytest.approx(result["theta_e2_ad_grid"][0, 0, 0])
+    assert result["e_diss_e_grid"][0, 0, 0] == pytest.approx(0.0)
+    assert result["inj_gate_grid"][0, 0, 0] == pytest.approx(0.0)
+    assert result["C_grid"][0, 0, 0] == pytest.approx(0.0)
+    assert result["inj_limit_mode_grid"][0, 0, 0] == result["inj_limit_modes"]["quenched_by_gate"]
+
+
+def test_pic_dual_cap_injection_is_capped_by_dual_constraints():
+    mask = np.ones((1, 1, 1), dtype=bool)
+    shock_properties = {
+        "mask": mask,
+        "mainline_mach": np.full((1, 1, 1), 3.0),
+        "rho1_code_grid": np.full((1, 1, 1), 2.0),
+        "press1_code_grid": np.full((1, 1, 1), 1.0),
+        "beta1_grid": np.full((1, 1, 1), 0.2),
+        "sr_sonic_mach": np.full((1, 1, 1), 5.0),
+        "theta_Bn": np.zeros((1, 1, 1)),
+        "rho2_code_grid": np.full((1, 1, 1), 4.0),
+        "press2_code_grid": np.full((1, 1, 1), 10.0),
+        "sample_boundary_clipped_grid": np.zeros((1, 1, 1), dtype=bool),
+        "sigma_grid": np.zeros((1, 1, 1)),
+    }
+
+    result = calculate_nonthermal_electrons(shock_properties, eta_inj_e0=1.0e-3, eps_nth_e0=3.0e-3)
+
+    unth_code = result["C_grid"][0, 0, 0]
+    n_nth = result["n_nth_phys_grid"][0, 0, 0]
+    n_eta = result["n_nth_eta_phys_grid"][0, 0, 0]
+    n_eps = result["n_nth_eps_phys_grid"][0, 0, 0]
+    assert result["inj_gate_grid"][0, 0, 0] > 0.0
+    assert unth_code > 0.0
+    assert n_nth > 0.0
+    assert n_nth <= n_eta + 1e-30
+    assert n_nth <= n_eps + 1e-30
+    assert result["inj_limit_mode_grid"][0, 0, 0] in (
+        result["inj_limit_modes"]["eta_cap"],
+        result["inj_limit_modes"]["eps_cap"],
+    )
 
 
 def test_nonthermal_rejects_removed_mask_switch_control():
     mask = np.ones((1, 1, 1), dtype=bool)
     shock_properties = {
         "mask": mask,
-        "upstream_mach": np.full((1, 1, 1), 3.0),
-        "downstream_temp": np.full((1, 1, 1), 1.0e8),
-        "downstream_n_e": np.full((1, 1, 1), 10.0),
+        "mainline_mach": np.full((1, 1, 1), 3.0),
+        "rho1_code_grid": np.full((1, 1, 1), 2.0),
+        "press1_code_grid": np.full((1, 1, 1), 1.0),
+        "beta1_grid": np.full((1, 1, 1), 1.0),
+        "sr_sonic_mach": np.full((1, 1, 1), 3.0),
         "rho2_code_grid": np.full((1, 1, 1), 2.0),
         "press2_code_grid": np.full((1, 1, 1), 4.0),
-        "press2_over_rho2_grid": np.full((1, 1, 1), 2.0),
-        "beta2_grid": np.full((1, 1, 1), 1.0),
         "sample_boundary_clipped_grid": np.zeros((1, 1, 1), dtype=bool),
     }
 
@@ -233,9 +311,10 @@ def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
     mask[0, 1, 3] = True
     shock_props = {
         "mask": mask,
-        "upstream_mach": np.ones_like(roi_data["rho"]),
+        "mainline_mach": np.ones_like(roi_data["rho"]),
         "verified_mask": mask.copy(),
         "sr_mach_normal": np.ones_like(roi_data["rho"]) * 1.5,
+        "sr_sonic_mach": np.ones_like(roi_data["rho"]) * 2.5,
         "theta_Bn": np.zeros_like(roi_data["rho"]),
         "h_rel_upstream": np.ones_like(roi_data["rho"]),
         "cfast_n_upstream": np.ones_like(roi_data["rho"]) * 0.5,
@@ -254,6 +333,25 @@ def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
         "gamma_min_grid": np.ones_like(roi_data["rho"]),
         "gamma_min_grid_physical": np.ones_like(roi_data["rho"]),
         "gamma_min_failure_code_grid": np.zeros_like(roi_data["rho"], dtype=int),
+        "theta_e_grid": np.ones_like(roi_data["rho"]) * 0.1,
+        "theta_e1_grid": np.ones_like(roi_data["rho"]) * 0.05,
+        "theta_e2_ad_grid": np.ones_like(roi_data["rho"]) * 0.08,
+        "sironi_boost_grid": np.ones_like(roi_data["rho"]) * 1.2,
+        "R1_grid": np.ones_like(roi_data["rho"]) * 10.0,
+        "Te2_grid": np.ones_like(roi_data["rho"]) * 1.0e8,
+        "eta_inj_e_grid": np.ones_like(roi_data["rho"]) * 1.0e-3,
+        "eps_nth_e_grid": np.ones_like(roi_data["rho"]) * 3.0e-3,
+        "e_diss_e_grid": np.ones_like(roi_data["rho"]) * 1.0e-6,
+        "inj_gate_grid": np.ones_like(roi_data["rho"]) * 0.5,
+        "n_nth_eta_phys_grid": np.ones_like(roi_data["rho"]) * 2.0e-4,
+        "n_nth_eps_phys_grid": np.ones_like(roi_data["rho"]) * 1.0e-4,
+        "n_nth_phys_grid": np.ones_like(roi_data["rho"]) * 1.0e-4,
+        "spectral_norm_eta_grid": np.ones_like(roi_data["rho"]) * 1.0e-7,
+        "spectral_norm_eps_grid": np.ones_like(roi_data["rho"]) * 5.0e-8,
+        "c_eta_grid": np.ones_like(roi_data["rho"]) * 1.0e-7,
+        "c_eps_grid": np.ones_like(roi_data["rho"]) * 5.0e-8,
+        "inj_limit_mode_grid": np.ones_like(roi_data["rho"], dtype=np.int16),
+        "inj_limit_modes": {"none": 0, "eta_cap": 1, "eps_cap": 2, "quenched_by_gate": 3, "invalid_or_boundary": 4},
     }
     nonthermal_props["gamma_min_grid"][0, 1, 3] = 4.2
     nonthermal_props["gamma_min_grid_physical"][0, 1, 3] = 4.2
@@ -269,6 +367,7 @@ def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
         with h5py.File(output_h5, "r") as handle:
             gamma_min = handle["GAMMA_MIN"][:]
             assert "SR_MACH_NORMAL" in handle
+            assert "SONIC_MACH" in handle
             assert "THETA_BN" in handle
             assert "H_REL_UPSTREAM" in handle
             assert "CFAST_N_UPSTREAM" in handle
@@ -278,8 +377,48 @@ def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
             assert "UTILDE_SQ_UPSTREAM" in handle
             assert "GAMMA_LORENTZ_UPSTREAM" in handle
             assert "UTILDE_N_UPSTREAM" in handle
+            assert "THETA_E1" in handle
+            assert "THETA_E2_AD" in handle
+            assert "THETA_E" in handle
+            assert "SIRONI_BOOST" in handle
+            assert "R1" in handle
+            assert "TE2" in handle
+            assert "ETA_INJ_E" in handle
+            assert "EPS_NTH_E" in handle
+            assert "E_DISS_E" in handle
+            assert "INJ_GATE" in handle
+            assert "N_NTH_ETA" in handle
+            assert "N_NTH_EPS" in handle
+            assert "N_NTH" in handle
+            assert "PL_NORM_ETA" in handle
+            assert "PL_NORM_EPS" in handle
+            assert "C_ETA" in handle
+            assert "C_EPS" in handle
+            assert "INJ_LIMIT_MODE" in handle
             assert np.isclose(handle["UTILDE_SQ_UPSTREAM"][3, 1, 0], 3.0)
             assert np.isclose(handle["GAMMA_LORENTZ_UPSTREAM"][3, 1, 0], 2.0)
             assert np.isclose(handle["UTILDE_N_UPSTREAM"][3, 1, 0], 1.5)
+            assert np.isclose(handle["SONIC_MACH"][3, 1, 0], 2.5)
 
     assert np.isclose(gamma_min[3, 1, 0], 4.2)
+
+
+def test_nonthermal_rejects_removed_beta_closure_controls():
+    mask = np.ones((1, 1, 1), dtype=bool)
+    shock_properties = {
+        "mask": mask,
+        "mainline_mach": np.full((1, 1, 1), 3.0),
+        "rho1_code_grid": np.full((1, 1, 1), 2.0),
+        "press1_code_grid": np.full((1, 1, 1), 1.0),
+        "beta1_grid": np.full((1, 1, 1), 1.0),
+        "sr_sonic_mach": np.full((1, 1, 1), 3.0),
+        "rho2_code_grid": np.full((1, 1, 1), 2.0),
+        "press2_code_grid": np.full((1, 1, 1), 4.0),
+        "sample_boundary_clipped_grid": np.zeros((1, 1, 1), dtype=bool),
+    }
+
+    with pytest.raises(ValueError, match="Removed beta-closure controls"):
+        calculate_nonthermal_electrons(
+            shock_properties,
+            r_low=1.0,
+        )

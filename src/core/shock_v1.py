@@ -44,7 +44,7 @@ def find_shocks_in_roi_mhd(
     jump_residual_max=0.4,
     compressibility_gate=True,
     discontinuity_rel_jump_min=0.05,
-    smeared_sr_mach_min=0.7,
+    smeared_sr_mach_min=1.2,
     logger=None,
     **deprecated_controls,
 ):
@@ -160,8 +160,8 @@ def find_shocks_in_roi_mhd(
     relative_jump = grad_P_mag * dl_eff / (p_tot + 1e-30)
     discontinuity_mask = relative_jump >= discontinuity_rel_jump_min
     discontinuity_count = int(np.sum(discontinuity_mask & compressibility_mask))
-    # Gate 3: ?????? SRMHD ??? (Smeared Local SR-Mach)
-    # ???????????????????????????
+    # Gate 3:  SRMHD-inspired局地马赫数初筛 (Smeared Local SR-Mach)
+    # 假定我们这里找到的马赫数是经过数值涂抹的局地马赫数，要求其超过一定阈值
     pre_mach_mask = compressibility_mask & discontinuity_mask
     local_sr_mach = np.zeros_like(press)
     if np.any(pre_mach_mask):
@@ -237,6 +237,10 @@ def find_shocks_in_roi_mhd(
     mainline_mach_grid = np.zeros_like(press)
     downstream_temp_grid = np.zeros_like(press)
     downstream_ne_grid = np.zeros_like(press)
+    rho1_code_grid = np.zeros_like(press)
+    press1_code_grid = np.zeros_like(press)
+    bsq1_code_grid = np.zeros_like(press)
+    beta1_grid = np.zeros_like(press)
     rho2_code_grid = np.zeros_like(press)
     press2_code_grid = np.zeros_like(press)
     press2_over_rho2_grid = np.zeros_like(press)
@@ -254,6 +258,7 @@ def find_shocks_in_roi_mhd(
     utilde_n_upstream_grid = np.zeros_like(press)
     theta_bn_grid = np.zeros_like(press)
     cfast_n_upstream_grid = np.zeros_like(press)
+    sr_sonic_mach_grid = np.zeros_like(press)
     sr_mach_normal_grid = np.zeros_like(press)
     ptot_jump_grid = np.zeros_like(press)
     entropy_jump_grid = np.zeros_like(press)
@@ -344,6 +349,10 @@ def find_shocks_in_roi_mhd(
         rho1 = rho[ku, ju, iu]
         press1 = press[ku, ju, iu]
         bsq1 = b_sq[ku, ju, iu]
+        rho1_code_grid[k, j, i] = rho1
+        press1_code_grid[k, j, i] = press1
+        bsq1_code_grid[k, j, i] = bsq1
+        beta1_grid[k, j, i] = _beta_from_press_bsq(press1, bsq1)
 
         local_r = r_coords[i]
         local_theta = theta_coords[j]
@@ -398,6 +407,10 @@ def find_shocks_in_roi_mhd(
         utilde_n_upstream_grid[k, j, i] = utilde_n1
 
         cs_sq_sr = np.divide(gamma * press1, w1, out=np.zeros((), dtype=float), where=w1 > 0)
+        cs_sq_sr = np.clip(cs_sq_sr, 0.0, 1.0 - 1e-12)
+        csonic = np.sqrt(cs_sq_sr)
+        u_sonic = np.divide(csonic, np.sqrt(np.maximum(1.0 - cs_sq_sr, 1e-12)))
+        sr_sonic_mach = np.divide(np.abs(u_n1), u_sonic, out=np.zeros((), dtype=float), where=u_sonic > 0)
         va_sq_sr = np.divide(bsq1, w1 + bsq1, out=np.zeros((), dtype=float), where=(w1 + bsq1) > 0)
         b_mag1 = np.sqrt(bsq1)
         b_dot_n = b1[ku, ju, iu] * n_r[k, j, i] + b2[ku, ju, iu] * n_theta[k, j, i] + b3[ku, ju, iu] * n_phi[k, j, i]
@@ -427,6 +440,7 @@ def find_shocks_in_roi_mhd(
         u_n_upstream_grid[k, j, i] = u_n1
         theta_bn_grid[k, j, i] = theta_bn
         cfast_n_upstream_grid[k, j, i] = cfast_n
+        sr_sonic_mach_grid[k, j, i] = sr_sonic_mach
         sr_mach_normal_grid[k, j, i] = sr_mach
         ptot_jump_grid[k, j, i] = ptot_jump
         entropy_jump_grid[k, j, i] = entropy_jump
@@ -477,6 +491,9 @@ def find_shocks_in_roi_mhd(
         logger.ai.debug(f"Sampling diagnostics={sampling_stats}")
         if refined_cells > 0:
             logger.ai.data("shock.mainline_mach.active", mainline_mach_grid[refined_shock_mask])
+            logger.ai.data("shock.rho1_code.active", rho1_code_grid[refined_shock_mask])
+            logger.ai.data("shock.press1_code.active", press1_code_grid[refined_shock_mask])
+            logger.ai.data("shock.beta1.active", beta1_grid[refined_shock_mask])
             logger.ai.data("shock.rho2_code.active", rho2_code_grid[refined_shock_mask])
             logger.ai.data("shock.press2_code.active", press2_code_grid[refined_shock_mask])
             logger.ai.data("shock.bsq2_code.active", bsq2_code_grid[refined_shock_mask])
@@ -487,6 +504,7 @@ def find_shocks_in_roi_mhd(
             logger.ai.data("shock.gamma_lorentz_upstream.active", gamma_lorentz_upstream_grid[refined_shock_mask])
             logger.ai.data("shock.utilde_n_upstream.active", utilde_n_upstream_grid[refined_shock_mask])
             logger.ai.data("shock.theta_bn.active", theta_bn_grid[refined_shock_mask])
+            logger.ai.data("shock.sr_sonic_mach.active", sr_sonic_mach_grid[refined_shock_mask])
             logger.ai.data("shock.jump_residual_light.active", jump_residual_light_grid[refined_shock_mask])
             logger.ai.codepath(
                 "Shock detection branch",
@@ -499,6 +517,10 @@ def find_shocks_in_roi_mhd(
         "mask": refined_shock_mask,
         "verified_mask": verified_shock_mask,
         "mainline_mach": mainline_mach_grid,
+        "rho1_code_grid": rho1_code_grid,
+        "press1_code_grid": press1_code_grid,
+        "bsq1_code_grid": bsq1_code_grid,
+        "beta1_grid": beta1_grid,
         "downstream_temp": downstream_temp_grid,
         "downstream_n_e": downstream_ne_grid,
         "rho2_code_grid": rho2_code_grid,
@@ -516,6 +538,7 @@ def find_shocks_in_roi_mhd(
         "utilde_n_upstream": utilde_n_upstream_grid,
         "theta_Bn": theta_bn_grid,
         "cfast_n_upstream": cfast_n_upstream_grid,
+        "sr_sonic_mach": sr_sonic_mach_grid,
         "sr_mach_normal": sr_mach_normal_grid,
         "ptot_jump": ptot_jump_grid,
         "entropy_jump": entropy_jump_grid,

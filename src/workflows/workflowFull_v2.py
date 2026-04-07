@@ -74,9 +74,22 @@ def process_snapshot(filename, config, logger=None):
         nt_params.pop("electron_temp_fraction", None)
         nt_params["rho_unit"] = rho_unit
         nt_params["u_unit"] = rho_unit * c_light_cgs**2
-        nt_params.setdefault("r_low", physics_cfg.get("r_low", 1.0))
-        nt_params.setdefault("r_high", physics_cfg.get("r_high", 80.0))
-        nt_params.setdefault("beta_crit", physics_cfg.get("beta_crit", 1.0))
+        removed_nt_controls = [key for key in ("r_low", "r_high", "beta_crit") if key in nt_params or key in physics_cfg]
+        if removed_nt_controls:
+            raise ValueError(
+                "Removed beta-closure controls detected: "
+                + ", ".join(sorted(set(removed_nt_controls)))
+                + ". Two-temperature Sironi-Tran heating is now the only active electron-heating chain."
+            )
+        nt_params.setdefault("sironi_tran_coeff", 0.0016)
+        nt_params.setdefault("sironi_tran_exp", 3.6)
+        nt_params.setdefault("sironi_tran_delta_max", 3.0)
+        nt_params.setdefault("eta_inj_e0", 1.0e-3)
+        nt_params.setdefault("eps_nth_e0", 3.0e-3)
+        nt_params.setdefault("theta_bn_quench", 50.0)
+        nt_params.setdefault("theta_bn_width", 10.0)
+        nt_params.setdefault("sonic_mach_inj_min", 1.5)
+        nt_params.setdefault("inj_model", "pic_dual_cap")
         shock_sr_cfg = dict(config.get("shock_sr", {}))
         stale_keys = [key for key in ("enable_sr_refine", "use_sr_refined_mask_for_nt") if key in shock_sr_cfg]
         if stale_keys:
@@ -106,7 +119,9 @@ def process_snapshot(filename, config, logger=None):
         if dual_logger:
             dual_logger.ai.debug(
                 f"Derived units: L_unit={l_unit_val:.3e}, rho_unit={rho_unit:.3e}, u_unit={nt_params['u_unit']:.3e}, "
-                f"r_low={nt_params['r_low']:.3f}, r_high={nt_params['r_high']:.3f}, beta_crit={nt_params['beta_crit']:.3f}"
+                f"sironi_tran_coeff={nt_params['sironi_tran_coeff']:.4f}, sironi_tran_exp={nt_params['sironi_tran_exp']:.2f}, "
+                f"sironi_tran_delta_max={nt_params['sironi_tran_delta_max']:.2f}, inj_model={nt_params['inj_model']}, "
+                f"eta_inj_e0={nt_params['eta_inj_e0']:.2e}, eps_nth_e0={nt_params['eps_nth_e0']:.2e}"
             )
             dual_logger.ai.codepath("Physics branch", f"enable_advection={enable_advection}")
             dual_logger.human.info(
@@ -187,7 +202,7 @@ def process_snapshot(filename, config, logger=None):
         if dual_logger and np.any(shock_props["mask"]):
             verified_mask = shock_props.get("verified_mask", shock_props["mask"])
             nt_mask = nonthermal_props.get("mask", shock_props["mask"])
-            c_grid = nonthermal_props.get("C_grid", np.array([]))
+            c_grid = nonthermal_props.get("unth_code_grid", nonthermal_props.get("C_grid", np.array([])))
             q_grid = nonthermal_props.get("q_grid", np.array([]))
             gamma_min_grid = nonthermal_props.get("gamma_min_grid", np.array([]))
             gamma_failure = nonthermal_props.get("gamma_min_failure_code_grid", np.array([]))
@@ -211,10 +226,10 @@ def process_snapshot(filename, config, logger=None):
                 )
                 dual_logger.human.info(
                     "Branch summary: "
-                    f"UNTH median={np.median(c_vals):.3e}; gamma_min valid={(gamma_failure_vals == 0).sum()}/{gamma_failure_vals.size if gamma_failure_vals.size else 0}; "
+                    f"UNTH(code) median={np.median(c_vals):.3e}; gamma_min valid={(gamma_failure_vals == 0).sum()}/{gamma_failure_vals.size if gamma_failure_vals.size else 0}; "
                     f"fallback_risk={(gamma_vals <= 1.0).sum()}"
                 )
-                dual_logger.ai.data("nonthermal.C_grid.active", c_vals)
+                dual_logger.ai.data("nonthermal.unth_code.active", c_vals)
                 dual_logger.ai.data("nonthermal.q_grid.active", q_vals)
                 dual_logger.ai.data("nonthermal.gamma_min.active", gamma_vals)
                 if gamma_failure_vals.size:
@@ -250,14 +265,35 @@ def process_snapshot(filename, config, logger=None):
             theta_e = nonthermal_props.get("theta_e_grid")
             if theta_e is not None and np.size(theta_e) > 0:
                 dual_logger.ai.data("nonthermal.theta_e.active", theta_e[nt_mask])
+            theta_e1 = nonthermal_props.get("theta_e1_grid")
+            if theta_e1 is not None and np.size(theta_e1) > 0:
+                dual_logger.ai.data("nonthermal.theta_e1.active", theta_e1[nt_mask])
+            theta_e2_ad = nonthermal_props.get("theta_e2_ad_grid")
+            if theta_e2_ad is not None and np.size(theta_e2_ad) > 0:
+                dual_logger.ai.data("nonthermal.theta_e2_ad.active", theta_e2_ad[nt_mask])
+            sironi_boost = nonthermal_props.get("sironi_boost_grid")
+            if sironi_boost is not None and np.size(sironi_boost) > 0:
+                dual_logger.ai.data("nonthermal.sironi_boost.active", sironi_boost[nt_mask])
 
             p_min_phys = nonthermal_props.get("p_min_physical_grid")
             if p_min_phys is not None and np.size(p_min_phys) > 0:
                 dual_logger.ai.data("nonthermal.p_min_physical.active", p_min_phys[nt_mask])
+            eta_inj_e = nonthermal_props.get("eta_inj_e_grid")
+            if eta_inj_e is not None and np.size(eta_inj_e) > 0:
+                dual_logger.ai.data("nonthermal.eta_inj_e.active", eta_inj_e[nt_mask])
+            eps_nth_e = nonthermal_props.get("eps_nth_e_grid")
+            if eps_nth_e is not None and np.size(eps_nth_e) > 0:
+                dual_logger.ai.data("nonthermal.eps_nth_e.active", eps_nth_e[nt_mask])
+            inj_gate = nonthermal_props.get("inj_gate_grid")
+            if inj_gate is not None and np.size(inj_gate) > 0:
+                dual_logger.ai.data("nonthermal.inj_gate.active", inj_gate[nt_mask])
+            n_nth_phys = nonthermal_props.get("n_nth_phys_grid")
+            if n_nth_phys is not None and np.size(n_nth_phys) > 0:
+                dual_logger.ai.data("nonthermal.n_nth_phys.active", n_nth_phys[nt_mask], "cm^-3")
 
             dual_logger.ai.codepath(
-                "Branch split",
-                "SRMHD mainline shock mask consumed by NT and gamma_min branches",
+                "Electron heating branch",
+                "Single two-temperature/Sironi-Tran heating plus PIC dual-cap injection gating",
             )
 
 

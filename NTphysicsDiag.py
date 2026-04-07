@@ -243,17 +243,24 @@ if __name__ == '__main__':
         # --- 激波探测参数 (使用新函数) ---
         "shock_params": {
             "gamma": 4.0/3.0,
-            "mach_threshold_loose": 1.05, 
-            "min_physical_mach": 1.7,  
             "grad_p_filter_quantile": 0.20,
             "march_cells": 5
+        },
+        "shock_sr": {
+            "sr_mach_min": 1.7,
+            "jump_residual_max": 0.8,
         },
 
         # --- 非热电子参数 ---
         "nt_params": {
             "gamma": 4.0/3.0,
             "x_inj": 3.5,
-            "xi_max": 0.05
+            "eta_inj_e0": 1.0e-3,
+            "eps_nth_e0": 3.0e-3,
+            "theta_bn_quench": 50.0,
+            "theta_bn_width": 10.0,
+            "sonic_mach_inj_min": 1.5,
+            "inj_model": "pic_dual_cap",
         },
 
         # --- 物理参数 (IPOLE) ---

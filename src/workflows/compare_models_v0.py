@@ -45,11 +45,11 @@ PARAMS = {
 
 
 def _default_metadata_output() -> str:
-    return os.path.join(PATHS["output"], "sigmaTest_run01")
+    return os.path.join(PATHS["output"], "logs_compareModels")
 
 
 def _default_data_output() -> str:
-    return os.path.join(PATHS["data_output"], "sigmaTest_run01")
+    return os.path.join(PATHS["data_output"], "logs_compareModels")
 
 
 def _resolve_scratch_work_dir(scratch_dir=None):
@@ -260,9 +260,9 @@ def main(args=None):
     if "C" in selected_models:
         logger.info("--- Model C: Shock-DSA | ipole-DSA + default emission + KEL preserved ---")
         try:
-            prepare_input(input_h5, h5_shock_in, mode="shock", logger=logger)
-            _copy_artifact_to_output(h5_shock_in, final_h5_shock_in, logger=logger)
-            elapsed["C"] = run_ipole(h5_shock_in, out_shock, ipole_dsa_bin, emission_type=None, logger=logger)
+            shock_input = input_h5
+            logger.info("Model C uses the source H5 directly; no shock-side input copy is needed.")
+            elapsed["C"] = run_ipole(shock_input, out_shock, ipole_dsa_bin, emission_type=None, logger=logger)
             _copy_artifact_to_output(out_shock, final_out_shock, logger=logger)
         except Exception as exc:
             logger.error(f"Model C failed: {exc}", exc_info=True)
@@ -274,7 +274,11 @@ def main(args=None):
     logger.info("=" * 60)
     logger.info("IPOLE Runtime Summary:")
     for model, runtime in elapsed.items():
-        logger.info(f"  Model {model}: {f'{runtime:.1f}s' if runtime is not None else 'FAILED'}")
+        if model not in selected_models:
+            status = "SKIPPED"
+        else:
+            status = f"{runtime:.1f}s" if runtime is not None else "FAILED"
+        logger.info(f"  Model {model}: {status}")
     logger.info(f"  Total elapsed: {time.time() - start_total:.1f}s")
     logger.info("=" * 60)
 
@@ -282,24 +286,38 @@ def main(args=None):
         logger.error(f"All requested compare_models runs failed for models={selected_models}. Skip plot generation.")
         return
 
-    if selected_models != ["A", "B", "C"]:
-        logger.info(f"Plot generation skipped because a model subset was requested: {selected_models}")
+    model_specs = {
+        "A": {
+            "label": "Model A (Thermal Only)",
+            "title": "A: Thermal Only",
+            "load_path": final_out_thermal if os.path.exists(final_out_thermal) else out_thermal,
+        },
+        "B": {
+            "label": "Model B (Reconnection/B^2)",
+            "title": "B: Reconnection Model",
+            "load_path": final_out_reconn if os.path.exists(final_out_reconn) else out_reconn,
+        },
+        "C": {
+            "label": "Model C (Shock-DSA/Ours)",
+            "title": "C: Shock-DSA",
+            "load_path": final_out_shock if os.path.exists(final_out_shock) else out_shock,
+        },
+    }
+    successful_models = [model for model in selected_models if elapsed.get(model) is not None]
+    if not successful_models:
+        logger.error("No successful model run available for flux report/plot generation.")
         return
 
-    load_path_a = final_out_thermal if os.path.exists(final_out_thermal) else out_thermal
-    load_path_b = final_out_reconn if os.path.exists(final_out_reconn) else out_reconn
-    load_path_c = final_out_shock if os.path.exists(final_out_shock) else out_shock
-
-    img_a, _ = load_intensity(load_path_a, logger=logger)
-    img_b, _ = load_intensity(load_path_b, logger=logger)
-    img_c, _ = load_intensity(load_path_c, logger=logger)
+    images = {}
+    for model in successful_models:
+        img, _ = load_intensity(model_specs[model]["load_path"], logger=logger)
+        images[model] = img
 
     logger.info("FLUX STATISTICS (Jy):")
-    logger.info(f"  Model A (Thermal Only)     : {np.sum(img_a):.4f}")
-    logger.info(f"  Model B (Reconnection/B^2) : {np.sum(img_b):.4f}")
-    logger.info(f"  Model C (Shock-DSA/Ours)   : {np.sum(img_c):.4f}")
+    for model in successful_models:
+        logger.info(f"  {model_specs[model]['label']:<28}: {np.sum(images[model]):.4f}")
 
-    valid_max = max(np.max(img_a), np.max(img_b), np.max(img_c))
+    valid_max = max(np.max(images[model]) for model in successful_models)
     if valid_max <= 0:
         logger.error("No positive image intensity available after compare_models runs. Skip plot generation.")
         return
@@ -308,30 +326,45 @@ def main(args=None):
     vmin_log = valid_max * 1e-4
     norm_log = mcolors.LogNorm(vmin=vmin_log, vmax=valid_max)
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    im0 = axes[0, 0].imshow(img_a, cmap="afmhot", origin="lower", norm=norm_log)
-    axes[0, 0].set_title("A: Thermal Only")
-    plt.colorbar(im0, ax=axes[0, 0])
+    if successful_models == ["A", "B", "C"]:
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        img_a = images["A"]
+        img_b = images["B"]
+        img_c = images["C"]
 
-    im1 = axes[0, 1].imshow(img_b, cmap="afmhot", origin="lower", norm=norm_log)
-    axes[0, 1].set_title("B: Reconnection Model")
-    plt.colorbar(im1, ax=axes[0, 1])
+        im0 = axes[0, 0].imshow(img_a, cmap="afmhot", origin="lower", norm=norm_log)
+        axes[0, 0].set_title("A: Thermal Only")
+        plt.colorbar(im0, ax=axes[0, 0])
 
-    im2 = axes[0, 2].imshow(img_c, cmap="afmhot", origin="lower", norm=norm_log)
-    axes[0, 2].set_title("C: Shock-DSA (Xia+25)")
-    plt.colorbar(im2, ax=axes[0, 2])
+        im1 = axes[0, 1].imshow(img_b, cmap="afmhot", origin="lower", norm=norm_log)
+        axes[0, 1].set_title("B: Reconnection Model")
+        plt.colorbar(im1, ax=axes[0, 1])
 
-    diff_shock = img_c - img_a
-    im3 = axes[1, 0].imshow(diff_shock, cmap="viridis", origin="lower")
-    axes[1, 0].set_title("C - A: Net Shock Contribution")
-    plt.colorbar(im3, ax=axes[1, 0])
+        im2 = axes[0, 2].imshow(img_c, cmap="afmhot", origin="lower", norm=norm_log)
+        axes[0, 2].set_title("C: Shock-DSA")
+        plt.colorbar(im2, ax=axes[0, 2])
 
-    diff_model = img_c - img_b
-    im4 = axes[1, 1].imshow(diff_model, cmap="RdBu_r", origin="lower")
-    axes[1, 1].set_title("C - B: Shock vs Reconnection")
-    plt.colorbar(im4, ax=axes[1, 1])
+        diff_shock = img_c - img_a
+        im3 = axes[1, 0].imshow(diff_shock, cmap="viridis", origin="lower")
+        axes[1, 0].set_title("C - A: Net Shock Contribution")
+        plt.colorbar(im3, ax=axes[1, 0])
 
-    axes[1, 2].axis("off")
+        diff_model = img_c - img_b
+        im4 = axes[1, 1].imshow(diff_model, cmap="RdBu_r", origin="lower")
+        axes[1, 1].set_title("C - B: Shock vs Reconnection")
+        plt.colorbar(im4, ax=axes[1, 1])
+
+        axes[1, 2].axis("off")
+    else:
+        ncols = len(successful_models)
+        fig, axes = plt.subplots(1, ncols, figsize=(6 * ncols, 5))
+        if ncols == 1:
+            axes = [axes]
+        for idx, model in enumerate(successful_models):
+            im = axes[idx].imshow(images[model], cmap="afmhot", origin="lower", norm=norm_log)
+            axes[idx].set_title(model_specs[model]["title"])
+            plt.colorbar(im, ax=axes[idx])
+
     plt.tight_layout()
     plot_dir = os.path.join(output_dir, "plots", f"compare_models_{run_timestamp}")
     os.makedirs(plot_dir, exist_ok=True)

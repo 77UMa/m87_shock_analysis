@@ -66,10 +66,8 @@ def create_default_config():
         },
         "shock_params": {
             "gamma": 4.0 / 3.0,
+            "grad_p_filter_quantile": 0.20,
             "march_cells": 6,
-            "compressibility_gate": True,
-            "discontinuity_rel_jump_min": 0.05,
-            "smeared_sr_mach_min": 1.2,
         },
         "shock_sr": {
             "sr_mach_min": 1.7,
@@ -78,9 +76,17 @@ def create_default_config():
         "nt_params": {
             "gamma": 4.0 / 3.0,
             "x_inj": 3.5,
-            "xi_max": 0.05,
+            "eta_inj_e0": 1.0e-3,
+            "eps_nth_e0": 3.0e-3,
+            "theta_bn_quench": 50.0,
+            "theta_bn_width": 10.0,
+            "sonic_mach_inj_min": 1.5,
+            "inj_model": "pic_dual_cap",
             "sigma_crit": 0.1,
             "alpha_sigma": 2,
+            "sironi_tran_coeff": 0.0016,
+            "sironi_tran_exp": 3.6,
+            "sironi_tran_delta_max": 3.0,
         },
         "physics": {
             "spin": 0.98,
@@ -91,6 +97,9 @@ def create_default_config():
             "advection_steps": 2000,
             "M_unit": 1e25,
             "MBH_solar": 6.2e9,
+        },
+        "hdf5_options": {
+            "include_3d_diagnostics": False,
         },
         "max_concurrent_tasks": 5,
     }
