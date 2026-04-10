@@ -224,19 +224,13 @@ def find_shocks_in_roi_mhd(
     print(f"  Final candidates: {geom_candidate_count} cells")
     if logger:
         logger.ai.data("shock.candidate_gate_stats", gate_stats)
-        logger.ai.data("shock.relative_jump", relative_jump)
-        logger.ai.data("shock.local_sr_mach", local_sr_mach)
 
     candidate_indices = np.argwhere(candidate_mask)
     if logger:
-        logger.ai.data("shock.p_tot", p_tot)
-        logger.ai.data("shock.grad_P_mag", grad_P_mag)
         logger.ai.debug(f"Shock candidate marching: {len(candidate_indices)} cells to sample")
 
     # --- 5. 稳健验证 (Gradient Marching) ---
     mainline_mach_grid = np.zeros_like(press)
-    downstream_temp_grid = np.zeros_like(press)
-    downstream_ne_grid = np.zeros_like(press)
     rho1_code_grid = np.zeros_like(press)
     press1_code_grid = np.zeros_like(press)
     bsq1_code_grid = np.zeros_like(press)
@@ -271,9 +265,6 @@ def find_shocks_in_roi_mhd(
         local_uu = local_press / (gamma - 1.0)
         local_denom = local_rho + local_uu + local_press
         return np.divide(local_bsq, 2.0 * local_denom, out=np.zeros((), dtype=float), where=local_denom > 0)
-
-    mu = 0.5
-    M_P, K_B = 1.6726e-24, 1.3806e-16
 
     sample_k2_grid = np.full_like(press, -1, dtype=int)
     sample_j2_grid = np.full_like(press, -1, dtype=int)
@@ -326,8 +317,6 @@ def find_shocks_in_roi_mhd(
         bsq2 = b_sq[kd, jd, id_]
 
         verified_shock_mask[k, j, i] = True
-        downstream_temp_grid[k, j, i] = (press2 * mu * M_P) / (rho2 * K_B)
-        downstream_ne_grid[k, j, i] = rho2 / M_P
         rho2_code_grid[k, j, i] = rho2
         press2_code_grid[k, j, i] = press2
         press2_over_rho2_grid[k, j, i] = np.divide(
@@ -489,6 +478,9 @@ def find_shocks_in_roi_mhd(
     if logger:
         logger.ai.debug(f"Verified shock cells={verified_cells}")
         logger.ai.debug(f"Sampling diagnostics={sampling_stats}")
+        if np.any(candidate_mask):
+            logger.ai.data("shock.relative_jump.candidates", relative_jump[candidate_mask])
+            logger.ai.data("shock.local_sr_mach.candidates", local_sr_mach[candidate_mask])
         if refined_cells > 0:
             logger.ai.data("shock.mainline_mach.active", mainline_mach_grid[refined_shock_mask])
             logger.ai.data("shock.rho1_code.active", rho1_code_grid[refined_shock_mask])
@@ -521,8 +513,6 @@ def find_shocks_in_roi_mhd(
         "press1_code_grid": press1_code_grid,
         "bsq1_code_grid": bsq1_code_grid,
         "beta1_grid": beta1_grid,
-        "downstream_temp": downstream_temp_grid,
-        "downstream_n_e": downstream_ne_grid,
         "rho2_code_grid": rho2_code_grid,
         "press2_code_grid": press2_code_grid,
         "press2_over_rho2_grid": press2_over_rho2_grid,

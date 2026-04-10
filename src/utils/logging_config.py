@@ -200,6 +200,141 @@ class HumanLogger:
         if high_p:
             self.warning(f"Abnormal p values: {high_p} shock cells with p > 5")
 
+    def log_stage_shock_acceptance(
+        self,
+        n_shock_cells: int,
+        coverage: float,
+        mach_values: np.ndarray,
+        sigma_values: Optional[np.ndarray],
+        sampling_stats: Dict[str, Any],
+    ) -> None:
+        self.result("Stage 1: Shock Acceptance")
+        self.result(
+            f"Accepted shock cells: {n_shock_cells} ({coverage:.2%} of ROI); "
+            f"verified candidates={sampling_stats.get('verified_count', 0)}, "
+            f"SR-refined={sampling_stats.get('sr_refined_count', 0)}"
+        )
+        if mach_values.size:
+            self.result(
+                "Mainline Mach: "
+                f"median={np.median(mach_values):.2f}, "
+                f"range=[{np.min(mach_values):.2f}, {np.max(mach_values):.2f}]"
+            )
+        if sigma_values is not None and sigma_values.size:
+            self.result(
+                "Sigma at accepted shocks: "
+                f"median={np.median(sigma_values):.3e}, "
+                f"range=[{np.min(sigma_values):.3e}, {np.max(sigma_values):.3e}]"
+            )
+        self.result(
+            "Rejections after candidate marching: "
+            f"low_mach={sampling_stats.get('sr_rejected_low_mach_count', 0)}, "
+            f"jump={sampling_stats.get('sr_rejected_jump_count', 0)}, "
+            f"entropy={sampling_stats.get('sr_rejected_entropy_count', 0)}, "
+            f"accepted_boundary_clipped={sampling_stats.get('boundary_clipped_verified_count', 0)}"
+        )
+
+    def log_stage_thermal_chain(
+        self,
+        beta1: np.ndarray,
+        r1: np.ndarray,
+        theta_e1: np.ndarray,
+        theta_e2_ad: np.ndarray,
+        sironi_boost: np.ndarray,
+        theta_e2: np.ndarray,
+        te2: np.ndarray,
+        gamma_min: np.ndarray,
+        gamma_failure: np.ndarray,
+    ) -> None:
+        self.result("Stage 2: Thermal Chain")
+        self.result(
+            "Upstream-to-downstream electron heating: "
+            f"beta1 median={np.median(beta1):.3e}, "
+            f"R1 median={np.median(r1):.3e}"
+        )
+        self.result(
+            f"Theta_e1 median={np.median(theta_e1):.3e}, "
+            f"Theta_e2_ad median={np.median(theta_e2_ad):.3e}, "
+            f"Sironi boost median={np.median(sironi_boost):.3e}"
+        )
+        self.result(
+            f"Theta_e2 median={np.median(theta_e2):.3e}, "
+            f"Te2 median={np.median(te2):.3e} K"
+        )
+        self.result(
+            f"gamma_min median={np.median(gamma_min):.3e}, "
+            f"range=[{np.min(gamma_min):.3e}, {np.max(gamma_min):.3e}], "
+            f"valid_fraction={np.mean(gamma_failure == 0):.2%}"
+        )
+
+    def log_stage_injection_gate(
+        self,
+        sonic_mach: np.ndarray,
+        theta_bn: np.ndarray,
+        inj_gate: np.ndarray,
+        eta_inj_e: np.ndarray,
+        eps_nth_e: np.ndarray,
+        sigma_suppression: Optional[np.ndarray] = None,
+    ) -> None:
+        self.result("Stage 3: Injection Gate")
+        self.result(
+            f"SR sonic Mach median={np.median(sonic_mach):.3e}, "
+            f"theta_Bn median={np.median(theta_bn):.3e} rad"
+        )
+        if sigma_suppression is not None and sigma_suppression.size:
+            self.result(
+                f"Sigma suppression median={np.median(sigma_suppression):.3e}, "
+                f"strong_suppression_fraction={np.mean(sigma_suppression < 0.1):.2%}"
+            )
+        self.result(
+            f"inj_gate median={np.median(inj_gate):.3e}, "
+            f"open_fraction={np.mean(inj_gate > 0):.2%}"
+        )
+        self.result(
+            f"eta_inj_e median={np.median(eta_inj_e):.3e}, "
+            f"eps_nth_e median={np.median(eps_nth_e):.3e}"
+        )
+
+    def log_stage_radiation_interface(
+        self,
+        p_min: np.ndarray,
+        q_vals: np.ndarray,
+        unth_code: np.ndarray,
+        n_nth: np.ndarray,
+        n_nth_eta: np.ndarray,
+        n_nth_eps: np.ndarray,
+        gamma_min: np.ndarray,
+        limit_mode: np.ndarray,
+    ) -> None:
+        self.result("Stage 4: Radiation Interface")
+        self.result(
+            f"p_min median={np.median(p_min):.3e}, "
+            f"q median={np.median(q_vals):.3e}, "
+            f"p=q-1 median={np.median(q_vals - 1.0):.3e}"
+        )
+        self.result(
+            f"n_nth median={np.median(n_nth):.3e} cm^-3, "
+            f"n_nth_eta median={np.median(n_nth_eta):.3e} cm^-3, "
+            f"n_nth_eps median={np.median(n_nth_eps):.3e} cm^-3"
+        )
+        self.result(
+            f"UNTH(code) median={np.median(unth_code):.3e}, "
+            f"range=[{np.min(unth_code):.3e}, {np.max(unth_code):.3e}]"
+        )
+        counts = {int(code): int(count) for code, count in zip(*np.unique(limit_mode, return_counts=True))}
+        total = float(limit_mode.size) if limit_mode.size else 1.0
+        self.result(
+            "Dual-cap branch fractions: "
+            f"eta_cap={counts.get(1, 0)/total:.2%}, "
+            f"eps_cap={counts.get(2, 0)/total:.2%}, "
+            f"quenched={counts.get(3, 0)/total:.2%}, "
+            f"invalid={counts.get(4, 0)/total:.2%}"
+        )
+        self.result(
+            f"gamma_min median at radiation interface={np.median(gamma_min):.3e}, "
+            f"range=[{np.min(gamma_min):.3e}, {np.max(gamma_min):.3e}]"
+        )
+
 
 class AILogger:
     """AI-oriented logger for debug details, data ranges, and code paths."""

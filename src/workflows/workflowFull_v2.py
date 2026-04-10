@@ -153,15 +153,31 @@ def process_snapshot(filename, config, logger=None):
             sigma_vals = sigma_vals[mask] if sigma_vals is not None else None
             coverage = float(np.sum(mask) / mask.size)
 
-            dual_logger.human.log_shock_stats(
+            sampling_stats = shock_props.get("sampling_stats", {})
+            dual_logger.human.log_stage_shock_acceptance(
                 n_shock_cells=int(np.sum(mask)),
+                coverage=coverage,
                 mach_values=mach_vals,
                 sigma_values=sigma_vals,
-                coverage=coverage,
+                sampling_stats=sampling_stats,
             )
-            dual_logger.ai.data("shock_props.mainline_mach.active", mach_vals)
-            if sigma_vals is not None:
-                dual_logger.ai.data("shock_props.sigma.active", sigma_vals)
+            dual_logger.ai.data(
+                "stage_summary.shock_acceptance",
+                {
+                    "shock_count": int(np.sum(mask)),
+                    "coverage": coverage,
+                    "mainline_mach_median": float(np.median(mach_vals)) if mach_vals.size else 0.0,
+                    "mainline_mach_min": float(np.min(mach_vals)) if mach_vals.size else 0.0,
+                    "mainline_mach_max": float(np.max(mach_vals)) if mach_vals.size else 0.0,
+                    "sigma_median": float(np.median(sigma_vals)) if sigma_vals is not None and sigma_vals.size else 0.0,
+                    "verified_count": int(sampling_stats.get("verified_count", 0)),
+                    "sr_refined_count": int(sampling_stats.get("sr_refined_count", 0)),
+                    "rejected_low_mach": int(sampling_stats.get("sr_rejected_low_mach_count", 0)),
+                    "rejected_jump": int(sampling_stats.get("sr_rejected_jump_count", 0)),
+                    "rejected_entropy": int(sampling_stats.get("sr_rejected_entropy_count", 0)),
+                    "accepted_boundary_clipped": int(sampling_stats.get("boundary_clipped_verified_count", 0)),
+                },
+            )
         elif dual_logger:
             dual_logger.human.result("Shock statistics: no shock cells detected")
             dual_logger.ai.codepath("No shocks after Step 2", "shock_props.mask contains no true cells")
@@ -213,27 +229,106 @@ def process_snapshot(filename, config, logger=None):
                 gamma_vals = gamma_min_grid[nt_mask] if np.size(gamma_min_grid) > 0 else np.array([1.0])
                 gamma_failure_vals = gamma_failure[nt_mask] if np.size(gamma_failure) > 0 else np.array([], dtype=int)
                 suppression_vals = sigma_suppression[nt_mask] if sigma_suppression is not None else None
+                theta_e1_vals = nonthermal_props.get("theta_e1_grid", np.array([]))
+                theta_e1_vals = theta_e1_vals[nt_mask] if np.size(theta_e1_vals) > 0 else np.array([])
+                theta_e2_ad_vals = nonthermal_props.get("theta_e2_ad_grid", np.array([]))
+                theta_e2_ad_vals = theta_e2_ad_vals[nt_mask] if np.size(theta_e2_ad_vals) > 0 else np.array([])
+                theta_e_vals = nonthermal_props.get("theta_e_grid", np.array([]))
+                theta_e_vals = theta_e_vals[nt_mask] if np.size(theta_e_vals) > 0 else np.array([])
+                sironi_boost_vals = nonthermal_props.get("sironi_boost_grid", np.array([]))
+                sironi_boost_vals = sironi_boost_vals[nt_mask] if np.size(sironi_boost_vals) > 0 else np.array([])
+                te2_vals = nonthermal_props.get("Te2_grid", np.array([]))
+                te2_vals = te2_vals[nt_mask] if np.size(te2_vals) > 0 else np.array([])
+                r1_vals = nonthermal_props.get("R1_grid", np.array([]))
+                r1_vals = r1_vals[nt_mask] if np.size(r1_vals) > 0 else np.array([])
+                beta1_vals = shock_props.get("beta1_grid", np.array([]))
+                beta1_vals = beta1_vals[nt_mask] if np.size(beta1_vals) > 0 else np.array([])
+                sonic_vals = shock_props.get("sr_sonic_mach", np.array([]))
+                sonic_vals = sonic_vals[nt_mask] if np.size(sonic_vals) > 0 else np.array([])
+                theta_bn_vals = shock_props.get("theta_Bn", np.array([]))
+                theta_bn_vals = theta_bn_vals[nt_mask] if np.size(theta_bn_vals) > 0 else np.array([])
+                inj_gate_vals = nonthermal_props.get("inj_gate_grid", np.array([]))
+                inj_gate_vals = inj_gate_vals[nt_mask] if np.size(inj_gate_vals) > 0 else np.array([])
+                eta_vals = nonthermal_props.get("eta_inj_e_grid", np.array([]))
+                eta_vals = eta_vals[nt_mask] if np.size(eta_vals) > 0 else np.array([])
+                eps_vals = nonthermal_props.get("eps_nth_e_grid", np.array([]))
+                eps_vals = eps_vals[nt_mask] if np.size(eps_vals) > 0 else np.array([])
+                p_min_vals = nonthermal_props.get("p_min_physical_grid", np.array([]))
+                p_min_vals = p_min_vals[nt_mask] if np.size(p_min_vals) > 0 else np.array([])
+                n_nth_vals = nonthermal_props.get("n_nth_phys_grid", np.array([]))
+                n_nth_vals = n_nth_vals[nt_mask] if np.size(n_nth_vals) > 0 else np.array([])
+                n_nth_eta_vals = nonthermal_props.get("n_nth_eta_phys_grid", np.array([]))
+                n_nth_eta_vals = n_nth_eta_vals[nt_mask] if np.size(n_nth_eta_vals) > 0 else np.array([])
+                n_nth_eps_vals = nonthermal_props.get("n_nth_eps_phys_grid", np.array([]))
+                n_nth_eps_vals = n_nth_eps_vals[nt_mask] if np.size(n_nth_eps_vals) > 0 else np.array([])
+                limit_mode_vals = nonthermal_props.get("inj_limit_mode_grid", np.array([]))
+                limit_mode_vals = limit_mode_vals[nt_mask] if np.size(limit_mode_vals) > 0 else np.array([], dtype=int)
 
-                dual_logger.human.log_nonthermal_stats(
-                    n_inj_total=float(np.sum(c_vals)),
-                    n_inj_range=(float(np.min(c_vals)), float(np.max(c_vals))),
-                    p_values=q_vals,
-                    gamma_min_values=gamma_vals,
-                    sigma_suppression=suppression_vals,
+                if (
+                    beta1_vals.size
+                    and r1_vals.size
+                    and theta_e1_vals.size
+                    and theta_e2_ad_vals.size
+                    and sironi_boost_vals.size
+                    and theta_e_vals.size
+                    and te2_vals.size
+                    and gamma_failure_vals.size
+                ):
+                    dual_logger.human.log_stage_thermal_chain(
+                        beta1=beta1_vals,
+                        r1=r1_vals,
+                        theta_e1=theta_e1_vals,
+                        theta_e2_ad=theta_e2_ad_vals,
+                        sironi_boost=sironi_boost_vals,
+                        theta_e2=theta_e_vals,
+                        te2=te2_vals,
+                        gamma_min=gamma_vals,
+                        gamma_failure=gamma_failure_vals,
+                    )
+                if sonic_vals.size and theta_bn_vals.size and inj_gate_vals.size and eta_vals.size and eps_vals.size:
+                    dual_logger.human.log_stage_injection_gate(
+                        sonic_mach=sonic_vals,
+                        theta_bn=theta_bn_vals,
+                        inj_gate=inj_gate_vals,
+                        eta_inj_e=eta_vals,
+                        eps_nth_e=eps_vals,
+                        sigma_suppression=suppression_vals,
+                    )
+                if (
+                    p_min_vals.size
+                    and q_vals.size
+                    and c_vals.size
+                    and n_nth_vals.size
+                    and n_nth_eta_vals.size
+                    and n_nth_eps_vals.size
+                    and gamma_vals.size
+                    and limit_mode_vals.size
+                ):
+                    dual_logger.human.log_stage_radiation_interface(
+                        p_min=p_min_vals,
+                        q_vals=q_vals,
+                        unth_code=c_vals,
+                        n_nth=n_nth_vals,
+                        n_nth_eta=n_nth_eta_vals,
+                        n_nth_eps=n_nth_eps_vals,
+                        gamma_min=gamma_vals,
+                        limit_mode=limit_mode_vals,
+                    )
+                dual_logger.ai.data(
+                    "stage_summary.radiation_interface",
+                    {
+                        "unth_code_median": float(np.median(c_vals)) if c_vals.size else 0.0,
+                        "unth_code_min": float(np.min(c_vals)) if c_vals.size else 0.0,
+                        "unth_code_max": float(np.max(c_vals)) if c_vals.size else 0.0,
+                        "q_median": float(np.median(q_vals)) if q_vals.size else 0.0,
+                        "p_median": float(np.median(q_vals - 1.0)) if q_vals.size else 0.0,
+                        "gamma_min_median": float(np.median(gamma_vals)) if gamma_vals.size else 1.0,
+                        "gamma_min_min": float(np.min(gamma_vals)) if gamma_vals.size else 1.0,
+                        "gamma_min_max": float(np.max(gamma_vals)) if gamma_vals.size else 1.0,
+                        "gamma_valid_fraction": float(np.mean(gamma_failure_vals == 0)) if gamma_failure_vals.size else 1.0,
+                        "gamma_fallback_risk_count": int(np.sum(gamma_vals <= 1.0)) if gamma_vals.size else 0,
+                    },
                 )
-                dual_logger.human.info(
-                    f"NT mainline shock cells: verified_candidates={int(np.sum(verified_mask))}; accepted_mainline={int(np.sum(nt_mask))}"
-                )
-                dual_logger.human.info(
-                    "Branch summary: "
-                    f"UNTH(code) median={np.median(c_vals):.3e}; gamma_min valid={(gamma_failure_vals == 0).sum()}/{gamma_failure_vals.size if gamma_failure_vals.size else 0}; "
-                    f"fallback_risk={(gamma_vals <= 1.0).sum()}"
-                )
-                dual_logger.ai.data("nonthermal.unth_code.active", c_vals)
-                dual_logger.ai.data("nonthermal.q_grid.active", q_vals)
-                dual_logger.ai.data("nonthermal.gamma_min.active", gamma_vals)
-                if gamma_failure_vals.size:
-                    dual_logger.ai.data("nonthermal.gamma_min_failure.active", gamma_failure_vals)
 
             sampling_stats = shock_props.get("sampling_stats")
             if sampling_stats:
@@ -250,50 +345,9 @@ def process_snapshot(filename, config, logger=None):
                     f"rejected_entropy={sampling_stats.get('sr_rejected_entropy_count', 0)}"
                 )
 
-            sigma2_grid = shock_props.get("sigma2_grid")
-            if sigma2_grid is not None:
-                dual_logger.ai.data("shock.sigma2.active", sigma2_grid[verified_mask])
-
-            p2_over_rho2 = shock_props.get("press2_over_rho2_grid")
-            if p2_over_rho2 is not None:
-                dual_logger.ai.data("shock.press2_over_rho2.active", p2_over_rho2[verified_mask])
-
-            sample_clipped = shock_props.get("sample_boundary_clipped_grid")
-            if sample_clipped is not None:
-                dual_logger.ai.data("shock.sample_boundary_clipped.active", sample_clipped[verified_mask])
-
-            theta_e = nonthermal_props.get("theta_e_grid")
-            if theta_e is not None and np.size(theta_e) > 0:
-                dual_logger.ai.data("nonthermal.theta_e.active", theta_e[nt_mask])
-            theta_e1 = nonthermal_props.get("theta_e1_grid")
-            if theta_e1 is not None and np.size(theta_e1) > 0:
-                dual_logger.ai.data("nonthermal.theta_e1.active", theta_e1[nt_mask])
-            theta_e2_ad = nonthermal_props.get("theta_e2_ad_grid")
-            if theta_e2_ad is not None and np.size(theta_e2_ad) > 0:
-                dual_logger.ai.data("nonthermal.theta_e2_ad.active", theta_e2_ad[nt_mask])
-            sironi_boost = nonthermal_props.get("sironi_boost_grid")
-            if sironi_boost is not None and np.size(sironi_boost) > 0:
-                dual_logger.ai.data("nonthermal.sironi_boost.active", sironi_boost[nt_mask])
-
-            p_min_phys = nonthermal_props.get("p_min_physical_grid")
-            if p_min_phys is not None and np.size(p_min_phys) > 0:
-                dual_logger.ai.data("nonthermal.p_min_physical.active", p_min_phys[nt_mask])
-            eta_inj_e = nonthermal_props.get("eta_inj_e_grid")
-            if eta_inj_e is not None and np.size(eta_inj_e) > 0:
-                dual_logger.ai.data("nonthermal.eta_inj_e.active", eta_inj_e[nt_mask])
-            eps_nth_e = nonthermal_props.get("eps_nth_e_grid")
-            if eps_nth_e is not None and np.size(eps_nth_e) > 0:
-                dual_logger.ai.data("nonthermal.eps_nth_e.active", eps_nth_e[nt_mask])
-            inj_gate = nonthermal_props.get("inj_gate_grid")
-            if inj_gate is not None and np.size(inj_gate) > 0:
-                dual_logger.ai.data("nonthermal.inj_gate.active", inj_gate[nt_mask])
-            n_nth_phys = nonthermal_props.get("n_nth_phys_grid")
-            if n_nth_phys is not None and np.size(n_nth_phys) > 0:
-                dual_logger.ai.data("nonthermal.n_nth_phys.active", n_nth_phys[nt_mask], "cm^-3")
-
             dual_logger.ai.codepath(
                 "Electron heating branch",
-                "Single two-temperature/Sironi-Tran heating plus PIC dual-cap injection gating",
+                "stage summaries only: shock acceptance, thermal chain, injection gate, radiation interface",
             )
 
 

@@ -7,7 +7,80 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
-from scipy.special import betainc
+
+
+POWERLAW_GAMMA_MAX_DEFAULT = 1.0e5
+K_INJ_QUADRATURE_ORDER = 48
+
+
+def _compute_relativistic_p_min(theta_e2, x_inj):
+    """Return relativistic injection threshold momentum p/(m_e c)."""
+    gamma_mean = 1.0 + 3.0 * np.maximum(theta_e2, 0.0)
+    p_th_rel_sq = np.maximum(gamma_mean * gamma_mean - 1.0, 0.0)
+    return x_inj * np.sqrt(p_th_rel_sq)
+
+
+def _compute_relativistic_k_inj(q, p_min, gamma_max=POWERLAW_GAMMA_MAX_DEFAULT):
+    """Return average kinetic energy per injected electron in units of m_e c^2.
+
+    The power-law tail is integrated from p_min to the finite cutoff implied by gamma_max.
+    A finite cutoff is required because the mean energy diverges for q <= 2 if the tail
+    is extended to infinity. The default gamma_max matches the ipole/Symphony default.
+    """
+    q = np.asarray(q, dtype=float)
+    p_min = np.asarray(p_min, dtype=float)
+    k_inj = np.zeros_like(q, dtype=float)
+
+    valid = np.isfinite(q) & np.isfinite(p_min) & (q > 1.0) & (p_min > 0.0)
+    if not np.any(valid):
+        return k_inj
+
+    gamma_max = max(float(gamma_max), 1.0 + 1.0e-12)
+    p_max = np.sqrt(max(gamma_max * gamma_max - 1.0, 0.0))
+    valid &= p_min < p_max
+    if not np.any(valid):
+        return k_inj
+
+    qv = q[valid]
+    pminv = p_min[valid]
+    log_span = np.log(p_max / pminv)
+    finite_span = np.isfinite(log_span) & (log_span > 0.0)
+    if not np.any(finite_span):
+        return k_inj
+
+    qv = qv[finite_span]
+    pminv = pminv[finite_span]
+    log_span = log_span[finite_span]
+
+    nodes, weights = np.polynomial.legendre.leggauss(K_INJ_QUADRATURE_ORDER)
+    x = 0.5 * (nodes + 1.0)
+    w = 0.5 * weights
+
+    log_p = np.log(pminv)[:, None] + log_span[:, None] * x[None, :]
+    p = np.exp(log_p)
+    gamma_p = np.sqrt(1.0 + p * p)
+    numerator_integrand = (gamma_p - 1.0) * np.exp((1.0 - qv)[:, None] * log_p)
+    numerator = log_span * np.sum(numerator_integrand * w[None, :], axis=1)
+
+    denom = np.empty_like(qv)
+    near_one = np.isclose(qv, 1.0, rtol=0.0, atol=1.0e-10)
+    denom[near_one] = np.log(p_max / pminv[near_one])
+    not_one = ~near_one
+    denom[not_one] = (
+        np.power(pminv[not_one], 1.0 - qv[not_one]) - np.power(p_max, 1.0 - qv[not_one])
+    ) / (qv[not_one] - 1.0)
+
+    kv = np.divide(
+        numerator,
+        denom,
+        out=np.zeros_like(numerator),
+        where=np.isfinite(denom) & (denom > 0.0),
+    )
+    kv = np.where(np.isfinite(kv) & (kv > 0.0), kv, 0.0)
+
+    valid_indices = np.flatnonzero(valid)
+    k_inj[valid_indices[finite_span]] = kv
+    return k_inj
 
 
 def calculate_nonthermal_electrons(
@@ -150,8 +223,8 @@ def calculate_nonthermal_electrons(
         print("  Power-law index 'q' calculated.")
         if logger:
             logger.ai.data("nt.q", q)
-        p_min_phys_sq = np.maximum(2.0 * x_inj**2 * theta_e2, 0.0)
-        p_min_phys = np.sqrt(p_min_phys_sq)
+        p_min_phys = _compute_relativistic_p_min(theta_e2, x_inj)
+        p_min_phys_sq = p_min_phys * p_min_phys
         gamma_min_raw = 1.0 + 3.0 * theta_e2
         failure = np.full(gamma_min_raw.shape, gamma_failure_codes["ok"], dtype=np.int16)
         failure[press1 <= 0] = gamma_failure_codes["press1_nonpositive"]
@@ -185,35 +258,27 @@ def calculate_nonthermal_electrons(
         print(f"  gamma_min failure summary: {failure_summary}")
         print(f"  gamma_min two-temp branch: valid={np.sum(valid_gamma)}/{failure.size}, median_valid={np.median(gamma_min[valid_gamma]) if np.any(valid_gamma) else 1.0:.2f}")
         if logger:
-            logger.ai.data("nt.beta1_shocks", beta1)
-            logger.ai.data("nt.R1_shocks", r1)
-            logger.ai.data("nt.theta_e1_shocks", theta_e1)
-            logger.ai.data("nt.theta_e2_ad_shocks", theta_e2_ad)
-            logger.ai.data("nt.sironi_boost_shocks", sironi_boost)
-            logger.ai.data("nt.theta_e2_shocks", theta_e2)
-            logger.ai.data("nt.Te2_shocks", t2, "K")
-            logger.ai.data("nt.rho2_code_shocks", rho2)
-            logger.ai.data("nt.press2_code_shocks", press2)
-            logger.ai.data("nt.p_min_shocks", p_min_phys)
-            logger.ai.data("nt.gamma_min_failure", failure)
             logger.ai.codepath("Electron heating branch", "upstream R-beta + adiabatic compression + saturated Sironi-Tran boost")
             logger.ai.codepath("Gamma-min branch", f"failure_counts={failure_summary}")
-            logger.ai.debug(
-                f"Two-temperature metadata={{'sironi_tran_coeff': {sironi_tran_coeff}, 'sironi_tran_exp': {sironi_tran_exp}, "
-                f"'sironi_tran_delta_max': {sironi_tran_delta_max}, 'finite_beta1_count': {int(np.sum(np.isfinite(beta1)))}, "
-                f"'finite_thetae2_count': {int(np.sum(np.isfinite(theta_e2) & (theta_e2 > 0)))}}}"
+            logger.ai.data(
+                "summary.thermal_chain",
+                {
+                    "beta1_median": float(np.median(beta1[np.isfinite(beta1)])) if np.any(np.isfinite(beta1)) else 0.0,
+                    "R1_median": float(np.median(r1[np.isfinite(r1)])) if np.any(np.isfinite(r1)) else 0.0,
+                    "theta_e1_median": float(np.median(theta_e1[np.isfinite(theta_e1)])) if np.any(np.isfinite(theta_e1)) else 0.0,
+                    "theta_e2_ad_median": float(np.median(theta_e2_ad[np.isfinite(theta_e2_ad)])) if np.any(np.isfinite(theta_e2_ad)) else 0.0,
+                    "sironi_boost_median": float(np.median(sironi_boost[np.isfinite(sironi_boost)])) if np.any(np.isfinite(sironi_boost)) else 0.0,
+                    "theta_e2_median": float(np.median(theta_e2[np.isfinite(theta_e2)])) if np.any(np.isfinite(theta_e2)) else 0.0,
+                    "Te2_median_K": float(np.median(t2[np.isfinite(t2)])) if np.any(np.isfinite(t2)) else 0.0,
+                    "gamma_min_valid_fraction": float(np.mean(valid_gamma)),
+                    "gamma_failure_counts": failure_summary,
+                },
             )
-        k_inj = np.zeros_like(q)
-        valid_q = (q > 2.0) & (q < 3.0)
-        if np.any(valid_q):
-            qv = q[valid_q]
-            p2v = p_min_phys_sq[valid_q]
-            x_beta = 1.0 / (1.0 + p2v)
-            incomplete_beta = betainc((qv - 2.0) / 2.0, (3.0 - qv) / 2.0, x_beta)
-            k_inj[valid_q] = (p_min_phys[valid_q] ** (qv - 1.0)) / 2.0 * incomplete_beta + np.sqrt(1.0 + p2v) - 1.0
-        print("  Mean kinetic energy 'K_inj' calculated.")
-        if logger:
-            logger.ai.data("nt.K_inj", k_inj)
+        k_inj = _compute_relativistic_k_inj(q, p_min_phys, gamma_max=POWERLAW_GAMMA_MAX_DEFAULT)
+        print(
+            "  Mean kinetic energy 'K_inj' calculated "
+            f"(relativistic finite-cutoff closure, gamma_max={POWERLAW_GAMMA_MAX_DEFAULT:.1e})."
+        )
         finite_theta_bn = np.isfinite(theta_bn)
         theta_bn_rad = np.deg2rad(theta_bn_quench)
         theta_bn_width_rad = np.deg2rad(max(theta_bn_width, 1.0e-6))
@@ -234,8 +299,6 @@ def calculate_nonthermal_electrons(
             )
             if logger:
                 logger.ai.codepath("Injection gate branch", "sigma_grid found and obliquity gate applied")
-                logger.ai.data("nt.sigma_at_shocks", sigma)
-                logger.ai.data("nt.sigma_gate", sigma_gate)
         else:
             sigma = np.zeros_like(theta_e2)
             sigma_gate = np.ones_like(theta_e2)
@@ -245,7 +308,7 @@ def calculate_nonthermal_electrons(
 
         finite_q = np.isfinite(q) & (q > 1.0)
         finite_p = np.isfinite(p_min_phys) & (p_min_phys > 0)
-        valid_tail = valid_q & finite_p
+        valid_tail = finite_q & finite_p
         valid_energy = valid_tail & np.isfinite(k_inj) & (k_inj > 0)
         positive_heating = np.isfinite(theta_e2) & np.isfinite(theta_e2_ad) & (theta_e2 > theta_e2_ad)
         valid_gate = (
@@ -308,23 +371,44 @@ def calculate_nonthermal_electrons(
         inj_limit_mode_grid[mask] = limit_mode
         print("  Final UNTH density calculated using PIC dual-cap injection.")
         if logger:
-            logger.ai.data("nt.eta_inj_e", eta_inj_e)
-            logger.ai.data("nt.eps_nth_e", eps_nth_e)
-            logger.ai.data("nt.e_diss_e", e_diss_e)
-            logger.ai.data("nt.inj_gate", inj_gate)
-            logger.ai.data("nt.n_nth_eta_phys", n_nth_eta_phys, "cm^-3")
-            logger.ai.data("nt.n_nth_eps_phys", n_nth_eps_phys, "cm^-3")
-            logger.ai.data("nt.n_nth_phys", n_nth_phys, "cm^-3")
-            logger.ai.data("nt.unth_code", unth_code)
-            logger.ai.data("nt.spectral_norm_eta", spectral_norm_eta)
-            logger.ai.data("nt.spectral_norm_eps", spectral_norm_eps)
-            logger.ai.data("nt.gamma_min", gamma_min)
             logger.ai.codepath(
                 "Injection branch",
                 "PIC dual-cap injection: UNTH is code-unit nonthermal number density after sonic/obliquity/sigma gating",
             )
             logger.ai.codepath("Gamma-min branch", "two-temperature/Sironi-Tran branch used for gamma_min_grid")
-            logger.ai.data("nt.inj_limit_mode", limit_mode)
+            logger.ai.codepath(
+                "Relativistic closure",
+                f"p_min uses relativistic thermal momentum and K_inj uses finite-cutoff numerical integration with gamma_max={POWERLAW_GAMMA_MAX_DEFAULT:.1e}",
+            )
+            logger.ai.data(
+                "summary.injection_gate",
+                {
+                    "theta_bn_median_rad": float(np.median(theta_bn[finite_theta_bn])) if np.any(finite_theta_bn) else 0.0,
+                    "sigma_median": float(np.median(sigma[np.isfinite(sigma)])) if np.any(np.isfinite(sigma)) else 0.0,
+                    "sigma_gate_median": float(np.median(sigma_gate[np.isfinite(sigma_gate)])) if np.any(np.isfinite(sigma_gate)) else 0.0,
+                    "obliquity_gate_median": float(np.median(obliquity_gate[np.isfinite(obliquity_gate)])) if np.any(np.isfinite(obliquity_gate)) else 0.0,
+                    "inj_gate_median": float(np.median(inj_gate[np.isfinite(inj_gate)])) if np.any(np.isfinite(inj_gate)) else 0.0,
+                    "inj_gate_open_fraction": float(np.mean(inj_gate > 0)),
+                    "sr_sonic_mach_median": float(np.median(sonic_mach[np.isfinite(sonic_mach)])) if np.any(np.isfinite(sonic_mach)) else 0.0,
+                },
+            )
+            logger.ai.data(
+                "summary.nonthermal_closure",
+                {
+                    "p_min_median": float(np.median(p_min_phys[np.isfinite(p_min_phys)])) if np.any(np.isfinite(p_min_phys)) else 0.0,
+                    "k_inj_median": float(np.median(k_inj[np.isfinite(k_inj) & (k_inj > 0)])) if np.any(np.isfinite(k_inj) & (k_inj > 0)) else 0.0,
+                    "k_inj_finite_cutoff_gamma_max": POWERLAW_GAMMA_MAX_DEFAULT,
+                    "eta_inj_e_median": float(np.median(eta_inj_e[np.isfinite(eta_inj_e)])) if np.any(np.isfinite(eta_inj_e)) else 0.0,
+                    "eps_nth_e_median": float(np.median(eps_nth_e[np.isfinite(eps_nth_e)])) if np.any(np.isfinite(eps_nth_e)) else 0.0,
+                    "e_diss_e_median": float(np.median(e_diss_e[np.isfinite(e_diss_e)])) if np.any(np.isfinite(e_diss_e)) else 0.0,
+                    "n_nth_eta_median_cm^-3": float(np.median(n_nth_eta_phys[np.isfinite(n_nth_eta_phys)])) if np.any(np.isfinite(n_nth_eta_phys)) else 0.0,
+                    "n_nth_eps_median_cm^-3": float(np.median(n_nth_eps_phys[np.isfinite(n_nth_eps_phys)])) if np.any(np.isfinite(n_nth_eps_phys)) else 0.0,
+                    "n_nth_median_cm^-3": float(np.median(n_nth_phys[np.isfinite(n_nth_phys)])) if np.any(np.isfinite(n_nth_phys)) else 0.0,
+                    "unth_code_median": float(np.median(unth_code[np.isfinite(unth_code)])) if np.any(np.isfinite(unth_code)) else 0.0,
+                    "gamma_min_median": float(np.median(gamma_min[np.isfinite(gamma_min)])) if np.any(np.isfinite(gamma_min)) else 1.0,
+                    "inj_limit_counts": {int(code): int(count) for code, count in zip(*np.unique(limit_mode, return_counts=True))},
+                },
+            )
         print(
             "  SRMHD mainline injection: "
             f"UNTH_code median={np.median(unth_code):.3e}, n_nth_phys median={np.median(n_nth_phys):.3e} cm^-3, "

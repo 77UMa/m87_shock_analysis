@@ -4,8 +4,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytest.importorskip("scipy.special", reason="scipy is required for nonthermal electron tests")
-
 try:
     import h5py
 except ModuleNotFoundError:
@@ -13,7 +11,12 @@ except ModuleNotFoundError:
 
 
 
-from src.core.nt_electron_v1 import calculate_nonthermal_electrons
+from src.core.nt_electron_v1 import (
+    POWERLAW_GAMMA_MAX_DEFAULT,
+    _compute_relativistic_k_inj,
+    _compute_relativistic_p_min,
+    calculate_nonthermal_electrons,
+)
 from src.core.shock_v1 import find_shocks_in_roi_mhd
 from src.workflows.base_workflow import save_h5_file
 
@@ -225,6 +228,35 @@ def test_two_temp_chain_uses_upstream_beta_and_sonic_mach():
     assert result["C_grid"][0, 0, 0] >= 0.0
 
 
+def test_relativistic_p_min_matches_low_theta_limit():
+    theta_e2 = np.array([1.0e-6, 1.0e-4, 1.0e-3])
+    x_inj = 3.5
+    p_min = _compute_relativistic_p_min(theta_e2, x_inj)
+    low_theta_limit = x_inj * np.sqrt(6.0 * theta_e2)
+    assert np.allclose(p_min, low_theta_limit, rtol=5.0e-4, atol=0.0)
+
+
+def test_relativistic_k_inj_is_positive_and_monotone_in_p_min():
+    q = np.array([2.3, 2.3, 2.3])
+    p_min = np.array([0.5, 1.0, 2.0])
+    k_inj = _compute_relativistic_k_inj(q, p_min)
+    assert np.all(np.isfinite(k_inj))
+    assert np.all(k_inj > 0.0)
+    assert np.all(np.diff(k_inj) > 0.0)
+
+
+def test_relativistic_k_inj_handles_q_outside_old_beta_domain():
+    q = np.array([1.8, 2.2, 3.4])
+    p_min = np.array([1.0, 1.0, 1.0])
+    k_inj = _compute_relativistic_k_inj(q, p_min)
+    assert np.all(np.isfinite(k_inj))
+    assert np.all(k_inj > 0.0)
+
+    harder = _compute_relativistic_k_inj(np.array([1.8]), np.array([1.0]))[0]
+    softer = _compute_relativistic_k_inj(np.array([3.4]), np.array([1.0]))[0]
+    assert harder > softer
+
+
 def test_pic_dual_cap_injection_quenches_without_irreversible_heating():
     mask = np.ones((1, 1, 1), dtype=bool)
     shock_properties = {
@@ -281,6 +313,18 @@ def test_pic_dual_cap_injection_is_capped_by_dual_constraints():
         result["inj_limit_modes"]["eta_cap"],
         result["inj_limit_modes"]["eps_cap"],
     )
+    assert np.isfinite(result["p_min_physical_grid"][0, 0, 0])
+    assert result["p_min_physical_grid"][0, 0, 0] > 0.0
+    assert np.isfinite(result["c_eps_grid"][0, 0, 0])
+
+
+def test_relativistic_k_inj_matches_python_closure_cutoff_assumption():
+    q = np.array([2.2])
+    p_min = np.array([1.0])
+    k_inj = _compute_relativistic_k_inj(q, p_min, gamma_max=POWERLAW_GAMMA_MAX_DEFAULT)[0]
+    k_inj_lower_cutoff = _compute_relativistic_k_inj(q, p_min, gamma_max=1.0e3)[0]
+    assert k_inj > 0.0
+    assert k_inj >= k_inj_lower_cutoff
 
 
 def test_nonthermal_rejects_removed_mask_switch_control():
