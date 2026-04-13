@@ -83,6 +83,93 @@ def _compute_relativistic_k_inj(q, p_min, gamma_max=POWERLAW_GAMMA_MAX_DEFAULT):
     return k_inj
 
 
+def _compute_total_internal_energy_excess(press1, press2, compression, gamma, u_unit):
+    """Return irreversible total internal-energy excess in erg cm^-3.
+
+    This uses the downstream gas internal-energy excess above adiabatic compression:
+    u_diss,tot = max(u2 - u2,ad, 0), with
+    u = p/(gamma-1), p2,ad = p1 * (rho2/rho1)^gamma.
+    """
+    press1 = np.asarray(press1, dtype=float)
+    press2 = np.asarray(press2, dtype=float)
+    compression = np.asarray(compression, dtype=float)
+
+    if gamma <= 1.0:
+        return np.zeros_like(press2, dtype=float)
+
+    positive_states = (press1 > 0.0) & (press2 > 0.0) & np.isfinite(compression) & (compression > 0.0)
+    press2_ad = np.zeros_like(press2, dtype=float)
+    press2_ad[positive_states] = press1[positive_states] * np.power(compression[positive_states], gamma)
+
+    u2_code = np.divide(press2, gamma - 1.0, out=np.zeros_like(press2), where=press2 > 0.0)
+    u2_ad_code = np.divide(press2_ad, gamma - 1.0, out=np.zeros_like(press2_ad), where=press2_ad > 0.0)
+    u_diss_tot = np.maximum(u2_code - u2_ad_code, 0.0) * u_unit
+    return np.where(np.isfinite(u_diss_tot) & (u_diss_tot > 0.0), u_diss_tot, 0.0)
+
+
+def _compute_effective_powerlaw_index(
+    mainline_mach,
+    p_classical,
+    theta_bn,
+    sigma,
+    classical_fast_mach_max,
+    relativistic_fast_mach_min,
+    theta_bn_parallel_max_deg,
+    theta_bn_oblique_max_deg,
+    sigma_rel_parallel_max,
+    sigma_rel_oblique_max,
+    p_eff_parallel,
+    p_eff_oblique,
+    p_eff_steep,
+    p_eff_floor,
+    p_eff_ceiling,
+):
+    """Hybrid spectral closure for weak and strong relativistic shocks.
+
+    Weak shocks use the classical approximation. Strong shocks use a regime-based
+    relativistic classification controlled by obliquity and magnetization.
+    Between the two limits, the closure blends smoothly in fast-Mach space.
+    """
+    mainline_mach = np.asarray(mainline_mach, dtype=float)
+    p_classical = np.asarray(p_classical, dtype=float)
+    theta_bn = np.asarray(theta_bn, dtype=float)
+    sigma = np.asarray(sigma, dtype=float)
+
+    p_classical_clipped = np.clip(
+        np.where(np.isfinite(p_classical), p_classical, p_eff_steep),
+        p_eff_floor,
+        p_eff_ceiling,
+    )
+
+    theta_parallel_max = np.deg2rad(theta_bn_parallel_max_deg)
+    theta_oblique_max = np.deg2rad(theta_bn_oblique_max_deg)
+
+    valid_theta = np.isfinite(theta_bn)
+    valid_sigma = np.isfinite(sigma) & (sigma >= 0.0)
+    favorable = valid_theta & valid_sigma & (theta_bn <= theta_parallel_max) & (sigma <= sigma_rel_parallel_max)
+    oblique = valid_theta & valid_sigma & (theta_bn <= theta_oblique_max) & (sigma <= sigma_rel_oblique_max) & (~favorable)
+
+    p_rel = np.full_like(p_classical_clipped, p_eff_steep, dtype=float)
+    p_rel[favorable] = p_eff_parallel
+    p_rel[oblique] = p_eff_oblique
+    p_rel = np.clip(p_rel, p_eff_floor, p_eff_ceiling)
+
+    p_eff = p_classical_clipped.copy()
+    weak = np.isfinite(mainline_mach) & (mainline_mach <= classical_fast_mach_max)
+    strong = np.isfinite(mainline_mach) & (mainline_mach >= relativistic_fast_mach_min)
+    transition = np.isfinite(mainline_mach) & (~weak) & (~strong)
+
+    p_eff[strong] = p_rel[strong]
+    if np.any(transition):
+        width = max(relativistic_fast_mach_min - classical_fast_mach_max, 1.0e-6)
+        blend = np.clip((mainline_mach[transition] - classical_fast_mach_max) / width, 0.0, 1.0)
+        p_eff[transition] = (1.0 - blend) * p_classical_clipped[transition] + blend * p_rel[transition]
+
+    invalid_mach = ~np.isfinite(mainline_mach)
+    p_eff[invalid_mach] = p_rel[invalid_mach]
+    return np.clip(p_eff, p_eff_floor, p_eff_ceiling)
+
+
 def calculate_nonthermal_electrons(
     shock_properties,
     gamma=4.0 / 3.0,
@@ -94,6 +181,19 @@ def calculate_nonthermal_electrons(
     theta_bn_width=10.0,
     sonic_mach_inj_min=1.5,
     inj_model="pic_dual_cap",
+    energy_budget_model="total_internal_energy_excess",
+    p_eff_model="hybrid_classical_relativistic",
+    classical_fast_mach_max=1.8,
+    relativistic_fast_mach_min=3.0,
+    theta_bn_parallel_max=35.0,
+    theta_bn_oblique_max=60.0,
+    sigma_rel_parallel_max=1.0e-3,
+    sigma_rel_oblique_max=1.0e-2,
+    p_eff_parallel=2.35,
+    p_eff_oblique=2.8,
+    p_eff_steep=3.5,
+    p_eff_floor=1.5,
+    p_eff_ceiling=4.5,
     sigma_crit=0.1,
     alpha_sigma=2,
     rho_unit=1.0,
@@ -119,7 +219,14 @@ def calculate_nonthermal_electrons(
             {"gamma": gamma, "x_inj": x_inj, "xi_max": xi_max, "eta_inj_e0": eta_inj_e0,
              "eps_nth_e0": eps_nth_e0, "theta_bn_quench": theta_bn_quench,
              "theta_bn_width": theta_bn_width, "sonic_mach_inj_min": sonic_mach_inj_min,
-             "inj_model": inj_model, "sigma_crit": sigma_crit,
+             "inj_model": inj_model, "energy_budget_model": energy_budget_model,
+             "p_eff_model": p_eff_model, "classical_fast_mach_max": classical_fast_mach_max,
+             "relativistic_fast_mach_min": relativistic_fast_mach_min,
+             "theta_bn_parallel_max": theta_bn_parallel_max, "theta_bn_oblique_max": theta_bn_oblique_max,
+             "sigma_rel_parallel_max": sigma_rel_parallel_max, "sigma_rel_oblique_max": sigma_rel_oblique_max,
+             "p_eff_parallel": p_eff_parallel, "p_eff_oblique": p_eff_oblique,
+             "p_eff_steep": p_eff_steep, "p_eff_floor": p_eff_floor, "p_eff_ceiling": p_eff_ceiling,
+             "sigma_crit": sigma_crit,
              "alpha_sigma": alpha_sigma, "rho_unit": rho_unit, "u_unit": u_unit,
              "sironi_tran_coeff": sironi_tran_coeff, "sironi_tran_exp": sironi_tran_exp,
              "sironi_tran_delta_max": sironi_tran_delta_max,
@@ -136,6 +243,8 @@ def calculate_nonthermal_electrons(
         raise ValueError('use_sr_refined_mask has been removed; shock_properties["mask"] is already the SRMHD mainline mask.')
     mask = shock_properties["mask"]
     q_grid = np.zeros_like(mask, dtype=float)
+    q_budget_grid = np.zeros_like(mask, dtype=float)
+    p_eff_grid = np.full_like(mask, 3.0, dtype=float)
     unth_code_grid = np.zeros_like(mask, dtype=float)
     gamma_min_grid = np.ones_like(mask, dtype=float)
     gamma_min_grid_physical = np.ones_like(mask, dtype=float)
@@ -151,6 +260,8 @@ def calculate_nonthermal_electrons(
     eta_inj_e_grid = np.zeros_like(mask, dtype=float)
     eps_nth_e_grid = np.zeros_like(mask, dtype=float)
     e_diss_e_grid = np.zeros_like(mask, dtype=float)
+    e_diss_tot_grid = np.zeros_like(mask, dtype=float)
+    u_nth_budget_grid = np.zeros_like(mask, dtype=float)
     inj_gate_grid = np.zeros_like(mask, dtype=float)
     n_nth_eta_phys_grid = np.zeros_like(mask, dtype=float)
     n_nth_eps_phys_grid = np.zeros_like(mask, dtype=float)
@@ -187,6 +298,16 @@ def calculate_nonthermal_electrons(
             raise ValueError(
                 f"Unsupported inj_model={inj_model!r}. 'pic_dual_cap' is the only active mainline injection model."
             )
+        if p_eff_model != "hybrid_classical_relativistic":
+            raise ValueError(
+                f"Unsupported p_eff_model={p_eff_model!r}. "
+                "'hybrid_classical_relativistic' is the only supported mainline spectral closure."
+            )
+        if energy_budget_model not in {"electron_thermal_excess", "total_internal_energy_excess"}:
+            raise ValueError(
+                f"Unsupported energy_budget_model={energy_budget_model!r}. "
+                "'total_internal_energy_excess' and 'electron_thermal_excess' are the supported options."
+            )
         mp_over_me = m_p / m_e
         mach_field = shock_properties["mainline_mach"] if "mainline_mach" in shock_properties else shock_properties["upstream_mach"]
         m1 = mach_field[mask]
@@ -220,9 +341,35 @@ def calculate_nonthermal_electrons(
         tau = 1.0 / inv_tau
         q = (tau + 2.0) / (tau - 1.0)
         q_grid[mask] = q
-        print("  Power-law index 'q' calculated.")
+        p_classical = q - 1.0
+        if "sigma_grid" in shock_properties:
+            sigma = shock_properties["sigma_grid"][mask]
+        else:
+            sigma = np.zeros_like(theta_e2)
+        p_eff = _compute_effective_powerlaw_index(
+            m1,
+            p_classical,
+            theta_bn,
+            sigma,
+            classical_fast_mach_max,
+            relativistic_fast_mach_min,
+            theta_bn_parallel_max,
+            theta_bn_oblique_max,
+            sigma_rel_parallel_max,
+            sigma_rel_oblique_max,
+            p_eff_parallel,
+            p_eff_oblique,
+            p_eff_steep,
+            p_eff_floor,
+            p_eff_ceiling,
+        )
+        q_budget = p_eff + 1.0
+        p_eff_grid[mask] = p_eff
+        q_budget_grid[mask] = q_budget
+        print("  Classical q diagnostic and effective p_eff spectral closure calculated.")
         if logger:
             logger.ai.data("nt.q", q)
+            logger.ai.data("nt.p_eff", p_eff)
         p_min_phys = _compute_relativistic_p_min(theta_e2, x_inj)
         p_min_phys_sq = p_min_phys * p_min_phys
         gamma_min_raw = 1.0 + 3.0 * theta_e2
@@ -274,7 +421,7 @@ def calculate_nonthermal_electrons(
                     "gamma_failure_counts": failure_summary,
                 },
             )
-        k_inj = _compute_relativistic_k_inj(q, p_min_phys, gamma_max=POWERLAW_GAMMA_MAX_DEFAULT)
+        k_inj = _compute_relativistic_k_inj(q_budget, p_min_phys, gamma_max=POWERLAW_GAMMA_MAX_DEFAULT)
         print(
             "  Mean kinetic energy 'K_inj' calculated "
             f"(relativistic finite-cutoff closure, gamma_max={POWERLAW_GAMMA_MAX_DEFAULT:.1e})."
@@ -289,7 +436,6 @@ def calculate_nonthermal_electrons(
         obliquity_gate[~finite_theta_bn] = 0.0
 
         if "sigma_grid" in shock_properties:
-            sigma = shock_properties["sigma_grid"][mask]
             sigma_gate = 1.0 / (1.0 + np.power(np.maximum(sigma, 0.0) / sigma_crit, alpha_sigma))
             sigma_suppression_grid[mask] = sigma_gate
             print(
@@ -306,7 +452,7 @@ def calculate_nonthermal_electrons(
             if logger:
                 logger.ai.codepath("Injection gate branch", "sigma_grid missing; sigma gate defaults to unity")
 
-        finite_q = np.isfinite(q) & (q > 1.0)
+        finite_q = np.isfinite(q_budget) & (q_budget > 1.0)
         finite_p = np.isfinite(p_min_phys) & (p_min_phys > 0)
         valid_tail = finite_q & finite_p
         valid_energy = valid_tail & np.isfinite(k_inj) & (k_inj > 0)
@@ -325,9 +471,14 @@ def calculate_nonthermal_electrons(
 
         eta_inj_e = eta_inj_e0 * inj_gate
         e_diss_e = 3.0 * n_e2_phys * m_e * c_light**2 * np.maximum(theta_e2 - theta_e2_ad, 0.0)
+        e_diss_tot = _compute_total_internal_energy_excess(press1, press2, compression, gamma, u_unit)
         eps_nth_e = np.where(positive_heating, eps_nth_e0 * inj_gate, 0.0)
         n_nth_eta_phys = eta_inj_e * n_e2_phys
-        u_eps = eps_nth_e * e_diss_e
+        if energy_budget_model == "electron_thermal_excess":
+            energy_reservoir = e_diss_e
+        else:
+            energy_reservoir = e_diss_tot
+        u_eps = eps_nth_e * energy_reservoir
         n_nth_eps_phys = np.divide(
             u_eps,
             k_inj * m_e * c_light**2,
@@ -344,7 +495,7 @@ def calculate_nonthermal_electrons(
             where=rho_unit > 0,
         )
 
-        number_norm_factor = (q - 1.0) * np.power(p_min_phys, q - 1.0)
+        number_norm_factor = (q_budget - 1.0) * np.power(p_min_phys, q_budget - 1.0)
         spectral_norm_eta = np.where(valid_tail, n_nth_eta_phys * number_norm_factor, 0.0)
         spectral_norm_eps = np.where(valid_energy, n_nth_eps_phys * number_norm_factor, 0.0)
         spectral_norm_eta = np.where(np.isfinite(spectral_norm_eta) & (spectral_norm_eta > 0), spectral_norm_eta, 0.0)
@@ -362,6 +513,8 @@ def calculate_nonthermal_electrons(
         eta_inj_e_grid[mask] = eta_inj_e
         eps_nth_e_grid[mask] = eps_nth_e
         e_diss_e_grid[mask] = e_diss_e
+        e_diss_tot_grid[mask] = e_diss_tot
+        u_nth_budget_grid[mask] = u_eps
         inj_gate_grid[mask] = inj_gate
         n_nth_eta_phys_grid[mask] = n_nth_eta_phys
         n_nth_eps_phys_grid[mask] = n_nth_eps_phys
@@ -374,6 +527,17 @@ def calculate_nonthermal_electrons(
             logger.ai.codepath(
                 "Injection branch",
                 "PIC dual-cap injection: UNTH is code-unit nonthermal number density after sonic/obliquity/sigma gating",
+            )
+            logger.ai.codepath(
+                "Energy budget branch",
+                f"energy_budget_model={energy_budget_model}",
+            )
+            logger.ai.codepath(
+                "Spectral closure branch",
+                (
+                    f"p_eff_model={p_eff_model}, classical_fast_mach_max={classical_fast_mach_max:.2f}, "
+                    f"relativistic_fast_mach_min={relativistic_fast_mach_min:.2f}"
+                ),
             )
             logger.ai.codepath("Gamma-min branch", "two-temperature/Sironi-Tran branch used for gamma_min_grid")
             logger.ai.codepath(
@@ -398,9 +562,16 @@ def calculate_nonthermal_electrons(
                     "p_min_median": float(np.median(p_min_phys[np.isfinite(p_min_phys)])) if np.any(np.isfinite(p_min_phys)) else 0.0,
                     "k_inj_median": float(np.median(k_inj[np.isfinite(k_inj) & (k_inj > 0)])) if np.any(np.isfinite(k_inj) & (k_inj > 0)) else 0.0,
                     "k_inj_finite_cutoff_gamma_max": POWERLAW_GAMMA_MAX_DEFAULT,
+                    "q_classical_median": float(np.median(q[np.isfinite(q)])) if np.any(np.isfinite(q)) else 0.0,
+                    "p_classical_median": float(np.median(p_classical[np.isfinite(p_classical)])) if np.any(np.isfinite(p_classical)) else 0.0,
+                    "p_eff_median": float(np.median(p_eff[np.isfinite(p_eff)])) if np.any(np.isfinite(p_eff)) else 0.0,
+                    "p_eff_model": p_eff_model,
                     "eta_inj_e_median": float(np.median(eta_inj_e[np.isfinite(eta_inj_e)])) if np.any(np.isfinite(eta_inj_e)) else 0.0,
                     "eps_nth_e_median": float(np.median(eps_nth_e[np.isfinite(eps_nth_e)])) if np.any(np.isfinite(eps_nth_e)) else 0.0,
+                    "energy_budget_model": energy_budget_model,
                     "e_diss_e_median": float(np.median(e_diss_e[np.isfinite(e_diss_e)])) if np.any(np.isfinite(e_diss_e)) else 0.0,
+                    "e_diss_tot_median": float(np.median(e_diss_tot[np.isfinite(e_diss_tot)])) if np.any(np.isfinite(e_diss_tot)) else 0.0,
+                    "u_nth_budget_median": float(np.median(u_eps[np.isfinite(u_eps)])) if np.any(np.isfinite(u_eps)) else 0.0,
                     "n_nth_eta_median_cm^-3": float(np.median(n_nth_eta_phys[np.isfinite(n_nth_eta_phys)])) if np.any(np.isfinite(n_nth_eta_phys)) else 0.0,
                     "n_nth_eps_median_cm^-3": float(np.median(n_nth_eps_phys[np.isfinite(n_nth_eps_phys)])) if np.any(np.isfinite(n_nth_eps_phys)) else 0.0,
                     "n_nth_median_cm^-3": float(np.median(n_nth_phys[np.isfinite(n_nth_phys)])) if np.any(np.isfinite(n_nth_phys)) else 0.0,
@@ -412,13 +583,15 @@ def calculate_nonthermal_electrons(
         print(
             "  SRMHD mainline injection: "
             f"UNTH_code median={np.median(unth_code):.3e}, n_nth_phys median={np.median(n_nth_phys):.3e} cm^-3, "
-            f"gamma_min median={np.median(gamma_min):.2f}, "
+            f"p_eff median={np.median(p_eff):.2f}, gamma_min median={np.median(gamma_min):.2f}, "
             f"gate_open_fraction={np.mean(inj_gate > 0):.1%}"
         )
     elif logger:
         logger.ai.codepath("Nonthermal branch", "no shock cells, returned zero grids")
     nonthermal_properties = {
         "q_grid": q_grid,
+        "q_budget_grid": q_budget_grid,
+        "p_eff_grid": p_eff_grid,
         "unth_code_grid": unth_code_grid,
         "C_grid": unth_code_grid,
         "mask": mask,
@@ -436,6 +609,8 @@ def calculate_nonthermal_electrons(
         "eta_inj_e_grid": eta_inj_e_grid,
         "eps_nth_e_grid": eps_nth_e_grid,
         "e_diss_e_grid": e_diss_e_grid,
+        "e_diss_tot_grid": e_diss_tot_grid,
+        "u_nth_budget_grid": u_nth_budget_grid,
         "inj_gate_grid": inj_gate_grid,
         "n_nth_eta_phys_grid": n_nth_eta_phys_grid,
         "n_nth_eps_phys_grid": n_nth_eps_phys_grid,
@@ -447,6 +622,8 @@ def calculate_nonthermal_electrons(
         "inj_limit_mode_grid": inj_limit_mode_grid,
         "inj_limit_modes": inj_limit_modes,
         "gamma_failure_codes": gamma_failure_codes,
+        "energy_budget_model": energy_budget_model,
+        "p_eff_model": p_eff_model,
     }
     if logger:
         logger.ai.func_exit("calculate_nonthermal_electrons", {"result_keys": sorted(nonthermal_properties.keys()), "shock_cells": int(np.sum(mask))})

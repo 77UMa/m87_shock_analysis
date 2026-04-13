@@ -1,8 +1,8 @@
-项目技术手册可以参阅/docs 其中最重要的文件是不断维护更新中的engineering_guide.md
+项目技术手册可以参阅/docs 尤其是不断维护更新中的engineering_guide.md。
+关于项目目前的物理模型，可以参阅项目的报告/Report/M87_shock_report.tex
 主模块（本文件夹）通过Mutagen双向传输对应服务器文件夹/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/
-Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77UMa/m87_shock_analysis ，目前正处于分支 feature/sigma-suppression-methodB 的开发中
-子模块 ./ipole-DSA 对应github项目 https://github.com/77UMa/ipole ，目前也处于分支 feature/sigma-suppression-methodB 的开发中
-
+Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77UMa/m87_shock_analysis 
+子模块 ./ipole-DSA 对应github项目 https://github.com/77UMa/ipole 
 # ⚠️ CRITICAL: Methodology Computational Physics&SWE
 区别通用软件工程后端开发和我们正在进行的计算物理项目的方法论：
 我正在开发计算天体物理代码，在引入/修正物理时需要区分两种情况。

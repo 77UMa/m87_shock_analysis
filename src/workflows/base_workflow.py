@@ -14,7 +14,7 @@ sys.path.insert(0, project_root)
 try:
     from pyathena import athena_read
     from src.core.nt_electron_v1 import calculate_nonthermal_electrons
-    from src.core.shock_v1 import find_shocks_in_roi_mhd
+    from src.core.shock_v1 import compute_comoving_magnetic_geometry, find_shocks_in_roi_mhd
 except ImportError as exc:
     print(f"Fatal error: failed to import scientific modules. {exc}")
     sys.exit(1)
@@ -137,6 +137,19 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
     nt_params.setdefault("theta_bn_width", 10.0)
     nt_params.setdefault("sonic_mach_inj_min", 1.5)
     nt_params.setdefault("inj_model", "pic_dual_cap")
+    nt_params.setdefault("energy_budget_model", "total_internal_energy_excess")
+    nt_params.setdefault("p_eff_model", "hybrid_classical_relativistic")
+    nt_params.setdefault("classical_fast_mach_max", 1.8)
+    nt_params.setdefault("relativistic_fast_mach_min", 3.0)
+    nt_params.setdefault("theta_bn_parallel_max", 35.0)
+    nt_params.setdefault("theta_bn_oblique_max", 60.0)
+    nt_params.setdefault("sigma_rel_parallel_max", 1.0e-3)
+    nt_params.setdefault("sigma_rel_oblique_max", 1.0e-2)
+    nt_params.setdefault("p_eff_parallel", 2.35)
+    nt_params.setdefault("p_eff_oblique", 2.8)
+    nt_params.setdefault("p_eff_steep", 3.5)
+    nt_params.setdefault("p_eff_floor", 1.5)
+    nt_params.setdefault("p_eff_ceiling", 4.5)
     if logger:
         logger.ai.func_enter(
             "calculate_dsa_physics",
@@ -151,12 +164,14 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
     shock_props = find_shocks_in_roi_mhd(roi_data, logger=logger, **shock_params)
 
     gamma = shock_params.get("gamma", 4.0 / 3.0)
-    b_sq = roi_data["Bcc1"] ** 2 + roi_data["Bcc2"] ** 2 + roi_data["Bcc3"] ** 2
+    magnetic_geom = compute_comoving_magnetic_geometry(roi_data)
+    b_sq = magnetic_geom["b_sq_comoving"]
     uu = roi_data["press"] / (gamma - 1.0)
     denom = roi_data["rho"] + uu + roi_data["press"]
     sigma_grid = np.where(denom > 0, b_sq / (2.0 * denom), 0.0)
     shock_props["sigma_grid"] = sigma_grid
-    shock_props["sigma2_grid"] = np.where(shock_props["mask"], sigma_grid, 0.0)
+    if "sigma2_grid" not in shock_props:
+        shock_props["sigma2_grid"] = np.where(shock_props["mask"], sigma_grid, 0.0)
 
     if logger:
         logger.ai.data("shock_props.sigma_grid", sigma_grid)
@@ -176,6 +191,8 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
             logger.ai.codepath("No shock branch", "calculate_nonthermal_electrons skipped")
         nonthermal_props = {
             "q_grid": np.zeros_like(roi_data["rho"]),
+            "q_budget_grid": np.zeros_like(roi_data["rho"]),
+            "p_eff_grid": np.full_like(roi_data["rho"], 3.0),
             "unth_code_grid": np.zeros_like(roi_data["rho"]),
             "C_grid": np.zeros_like(roi_data["rho"]),
             "mask": shock_props["mask"],
@@ -193,6 +210,8 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
             "eta_inj_e_grid": np.zeros_like(roi_data["rho"]),
             "eps_nth_e_grid": np.zeros_like(roi_data["rho"]),
             "e_diss_e_grid": np.zeros_like(roi_data["rho"]),
+            "e_diss_tot_grid": np.zeros_like(roi_data["rho"]),
+            "u_nth_budget_grid": np.zeros_like(roi_data["rho"]),
             "inj_gate_grid": np.zeros_like(roi_data["rho"]),
             "n_nth_eta_phys_grid": np.zeros_like(roi_data["rho"]),
             "n_nth_eps_phys_grid": np.zeros_like(roi_data["rho"]),
@@ -202,6 +221,8 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
             "c_eta_grid": np.zeros_like(roi_data["rho"]),
             "c_eps_grid": np.zeros_like(roi_data["rho"]),
             "inj_limit_mode_grid": np.zeros_like(roi_data["rho"], dtype=np.int16),
+            "energy_budget_model": nt_params.get("energy_budget_model", "total_internal_energy_excess"),
+            "p_eff_model": nt_params.get("p_eff_model", "hybrid_classical_relativistic"),
             "inj_limit_modes": {
                 "none": 0,
                 "eta_cap": 1,
@@ -351,13 +372,17 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
 
         mask = shock_props["mask"]
         c_grid = nonthermal_props.get("unth_code_grid", nonthermal_props.get("C_grid", np.zeros_like(rho)))
+        p_eff_grid = nonthermal_props.get("p_eff_grid")
         q_grid = nonthermal_props.get("q_grid", np.zeros_like(rho))
         gamma_min_grid = nonthermal_props.get("gamma_min_grid", np.ones_like(rho))
         gamma_failure_grid = nonthermal_props.get("gamma_min_failure_code_grid", np.zeros_like(rho, dtype=np.int16))
         if "mainline_mach" not in shock_props:
             raise KeyError("mainline_mach")
         mainline_mach_grid = shock_props["mainline_mach"]
-        p_grid = np.where(mask, q_grid - 1.0, 3.0)
+        if p_eff_grid is not None:
+            p_grid = np.where(mask, p_eff_grid, 3.0)
+        else:
+            p_grid = np.where(mask, q_grid - 1.0, 3.0)
 
         shock_gamma_vals = gamma_min_grid[mask] if np.any(mask) else np.array([])
         fallback_risk_count = int(np.sum(mask & (gamma_min_grid <= 1.0)))
@@ -479,12 +504,20 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
                     "P_MIN_PHYSICAL",
                     data=nonthermal_props["p_min_physical_grid"].transpose(2, 1, 0).astype("f8"),
                 )
+            if "p_eff_grid" in nonthermal_props:
+                handle.create_dataset("P_EFF", data=nonthermal_props["p_eff_grid"].transpose(2, 1, 0).astype("f8"))
+            if "q_budget_grid" in nonthermal_props:
+                handle.create_dataset("Q_BUDGET", data=nonthermal_props["q_budget_grid"].transpose(2, 1, 0).astype("f8"))
             if "eta_inj_e_grid" in nonthermal_props:
                 handle.create_dataset("ETA_INJ_E", data=nonthermal_props["eta_inj_e_grid"].transpose(2, 1, 0).astype("f8"))
             if "eps_nth_e_grid" in nonthermal_props:
                 handle.create_dataset("EPS_NTH_E", data=nonthermal_props["eps_nth_e_grid"].transpose(2, 1, 0).astype("f8"))
             if "e_diss_e_grid" in nonthermal_props:
                 handle.create_dataset("E_DISS_E", data=nonthermal_props["e_diss_e_grid"].transpose(2, 1, 0).astype("f8"))
+            if "e_diss_tot_grid" in nonthermal_props:
+                handle.create_dataset("E_DISS_TOT", data=nonthermal_props["e_diss_tot_grid"].transpose(2, 1, 0).astype("f8"))
+            if "u_nth_budget_grid" in nonthermal_props:
+                handle.create_dataset("U_NTH_BUDGET", data=nonthermal_props["u_nth_budget_grid"].transpose(2, 1, 0).astype("f8"))
             if "inj_gate_grid" in nonthermal_props:
                 handle.create_dataset("INJ_GATE", data=nonthermal_props["inj_gate_grid"].transpose(2, 1, 0).astype("f8"))
             if "n_nth_eta_phys_grid" in nonthermal_props:
@@ -533,6 +566,10 @@ def save_h5_file(output_h5, roi_data, shock_props, nonthermal_props, config, log
         injection_modes = nonthermal_props.get("inj_limit_modes", {})
         for name, code in injection_modes.items():
             handle.attrs[f"inj_limit_mode_{name}"] = code
+        if "energy_budget_model" in nonthermal_props:
+            handle.attrs["energy_budget_model"] = nonthermal_props["energy_budget_model"]
+        if "p_eff_model" in nonthermal_props:
+            handle.attrs["p_eff_model"] = nonthermal_props["p_eff_model"]
 
         if np.any(mask):
             unique_codes, unique_counts = np.unique(gamma_failure_grid[mask], return_counts=True)

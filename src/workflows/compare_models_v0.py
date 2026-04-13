@@ -33,7 +33,7 @@ except ImportError as exc:
 FOV = 300
 PARAMS = {
     "thetacam": 163,
-    "freqcgs": 230e9,
+    "freqcgs": 86e9,
     "M_unit": 1e25,
     "trat_j": 1.0,
     "trat_d": 80.0,
@@ -297,7 +297,7 @@ def main(args=None):
                 "load_path": final_out_thermal if os.path.exists(final_out_thermal) else out_thermal,
             },
             "B": {
-                "label": "Model B (Reconnection/B^2)",
+                "label": "Model B (Reconnection/Magnetic)",
                 "title": "B: Reconnection Model",
                 "load_path": final_out_reconn if os.path.exists(final_out_reconn) else out_reconn,
             },

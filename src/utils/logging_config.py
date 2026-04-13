@@ -299,10 +299,15 @@ class HumanLogger:
         self,
         p_min: np.ndarray,
         q_vals: np.ndarray,
+        p_eff_vals: np.ndarray,
         unth_code: np.ndarray,
         n_nth: np.ndarray,
         n_nth_eta: np.ndarray,
         n_nth_eps: np.ndarray,
+        energy_budget_model: str,
+        e_diss_e: np.ndarray,
+        e_diss_tot: np.ndarray,
+        u_nth_budget: np.ndarray,
         gamma_min: np.ndarray,
         limit_mode: np.ndarray,
     ) -> None:
@@ -310,12 +315,19 @@ class HumanLogger:
         self.result(
             f"p_min median={np.median(p_min):.3e}, "
             f"q median={np.median(q_vals):.3e}, "
-            f"p=q-1 median={np.median(q_vals - 1.0):.3e}"
+            f"p_classical median={np.median(q_vals - 1.0):.3e}, "
+            f"p_eff median={np.median(p_eff_vals):.3e}"
         )
         self.result(
             f"n_nth median={np.median(n_nth):.3e} cm^-3, "
             f"n_nth_eta median={np.median(n_nth_eta):.3e} cm^-3, "
             f"n_nth_eps median={np.median(n_nth_eps):.3e} cm^-3"
+        )
+        self.result(
+            f"energy_budget_model={energy_budget_model}, "
+            f"e_diss_e median={np.median(e_diss_e):.3e} erg cm^-3, "
+            f"e_diss_tot median={np.median(e_diss_tot):.3e} erg cm^-3, "
+            f"U_nth median={np.median(u_nth_budget):.3e} erg cm^-3"
         )
         self.result(
             f"UNTH(code) median={np.median(unth_code):.3e}, "

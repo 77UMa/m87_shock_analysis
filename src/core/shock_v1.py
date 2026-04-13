@@ -34,6 +34,55 @@ except ImportError:
     go = None
 # --------------------------------------------------------------------------
 
+
+def compute_comoving_magnetic_geometry(roi_data):
+    """Build local orthonormal magnetic/velocity proxies and comoving b^2."""
+    shape = roi_data["rho"].shape
+    r_coords = 0.5 * (roi_data["x1f"][:-1] + roi_data["x1f"][1:])
+    theta_coords = 0.5 * (roi_data["x2f"][:-1] + roi_data["x2f"][1:])
+
+    r_grid = r_coords[np.newaxis, np.newaxis, :]
+    theta_grid = theta_coords[np.newaxis, :, np.newaxis]
+    sin_theta_grid = np.sin(theta_grid)
+
+    scale_theta = np.broadcast_to(r_grid, shape)
+    scale_phi = np.broadcast_to(r_grid * sin_theta_grid, shape)
+
+    u1_hat = roi_data["vel1"]
+    u2_hat = roi_data["vel2"] * scale_theta
+    u3_hat = roi_data["vel3"] * scale_phi
+
+    b1_hat = roi_data["Bcc1"]
+    b2_hat = roi_data["Bcc2"] * scale_theta
+    b3_hat = roi_data["Bcc3"] * scale_phi
+
+    utilde_sq = u1_hat**2 + u2_hat**2 + u3_hat**2
+    gamma_lorentz = np.sqrt(1.0 + utilde_sq)
+    b_lab_sq = b1_hat**2 + b2_hat**2 + b3_hat**2
+    u_dot_b = u1_hat * b1_hat + u2_hat * b2_hat + u3_hat * b3_hat
+    b_sq_comoving = np.divide(
+        b_lab_sq + u_dot_b**2,
+        gamma_lorentz**2,
+        out=np.zeros_like(b_lab_sq, dtype=float),
+        where=gamma_lorentz > 0.0,
+    )
+
+    return {
+        "r_coords": r_coords,
+        "theta_coords": theta_coords,
+        "r_grid": r_grid,
+        "theta_grid": theta_grid,
+        "sin_theta_grid": sin_theta_grid,
+        "u1_hat": u1_hat,
+        "u2_hat": u2_hat,
+        "u3_hat": u3_hat,
+        "b1_hat": b1_hat,
+        "b2_hat": b2_hat,
+        "b3_hat": b3_hat,
+        "b_lab_sq": b_lab_sq,
+        "b_sq_comoving": b_sq_comoving,
+    }
+
 def find_shocks_in_roi_mhd(
     roi_data,
     gamma=4.0 / 3.0,
@@ -51,7 +100,7 @@ def find_shocks_in_roi_mhd(
     """
     【3D MHD 稳健版激波探测器】
     针对 M87 GRMHD (球面坐标) 优化：
-    1. 使用总压 P_tot = P_gas + 0.5*B^2 进行梯度计算 [cite: 7836, 8412]。
+    1. 使用共动系磁场能量密度构造总压 P_tot = P_gas + 0.5*b^2 进行梯度计算 [cite: 7836, 8412]。
     2. 使用快磁声速 v_fast 作为特征速度 [cite: 7836, 8417]。
     3. 支持球面坐标系下的梯度修正 (r, theta, phi) 。
     """
@@ -106,16 +155,21 @@ def find_shocks_in_roi_mhd(
     nk, nj, ni = press.shape
     
     # 坐标准备 (用于梯度修正)
-    r_coords = (roi_data['x1f'][:-1] + roi_data['x1f'][1:]) / 2.0
-    theta_coords = (roi_data['x2f'][:-1] + roi_data['x2f'][1:]) / 2.0
+    magnetic_geom = compute_comoving_magnetic_geometry(roi_data)
+    r_coords = magnetic_geom["r_coords"]
+    theta_coords = magnetic_geom["theta_coords"]
     phi_coords = (roi_data['x3f'][:-1] + roi_data['x3f'][1:]) / 2.0
-    r_grid = r_coords[np.newaxis, np.newaxis, :]
-    theta_grid = theta_coords[np.newaxis, :, np.newaxis]
-    sin_theta_grid = np.sin(theta_grid)
+    r_grid = magnetic_geom["r_grid"]
+    theta_grid = magnetic_geom["theta_grid"]
+    sin_theta_grid = magnetic_geom["sin_theta_grid"]
 
     # --- 2. 计算 MHD 核心物理量 ---
     # a. 计算磁压与总压 [cite: 7836, 8412]
-    b_sq = b1**2 + b2**2 + b3**2
+    b_sq = magnetic_geom["b_sq_comoving"]
+    b_lab_sq = magnetic_geom["b_lab_sq"]
+    b1_hat = magnetic_geom["b1_hat"]
+    b2_hat = magnetic_geom["b2_hat"]
+    b3_hat = magnetic_geom["b3_hat"]
     p_mag = 0.5 * b_sq
     p_tot = press + p_mag
     
@@ -170,8 +224,8 @@ def find_shocks_in_roi_mhd(
         sin_theta_pre = np.sin(theta_coords[j_pre])
         press_pre = press[k_pre, j_pre, i_pre]
         rho_pre = rho[k_pre, j_pre, i_pre]
-        p_mag_pre = p_mag[k_pre, j_pre, i_pre]
         b_sq_pre = b_sq[k_pre, j_pre, i_pre]
+        b_lab_sq_pre = b_lab_sq[k_pre, j_pre, i_pre]
         n_r_pre = n_r[k_pre, j_pre, i_pre]
         n_theta_pre = n_theta[k_pre, j_pre, i_pre]
         n_phi_pre = n_phi[k_pre, j_pre, i_pre]
@@ -180,19 +234,19 @@ def find_shocks_in_roi_mhd(
             + (r_pre * vel2[k_pre, j_pre, i_pre]) * n_theta_pre
             + (r_pre * sin_theta_pre * vel3[k_pre, j_pre, i_pre]) * n_phi_pre
         )
-        w_local_pre = rho_pre + press_pre / (gamma - 1.0) + press_pre + p_mag_pre
-        cs_sq_local_pre = np.divide(gamma * press_pre, w_local_pre, out=np.zeros_like(press_pre), where=w_local_pre > 0)
+        w_gas_pre = rho_pre + press_pre / (gamma - 1.0) + press_pre
+        cs_sq_local_pre = np.divide(gamma * press_pre, w_gas_pre, out=np.zeros_like(press_pre), where=w_gas_pre > 0)
         va_sq_local_pre = np.divide(
             b_sq_pre,
-            w_local_pre + b_sq_pre,
+            w_gas_pre + b_sq_pre,
             out=np.zeros_like(b_sq_pre),
-            where=(w_local_pre + b_sq_pre) > 0,
+            where=(w_gas_pre + b_sq_pre) > 0,
         )
-        b_mag_pre = np.sqrt(b_sq_pre)
+        b_mag_pre = np.sqrt(b_lab_sq_pre)
         b_dot_n_pre = (
-            b1[k_pre, j_pre, i_pre] * n_r_pre
-            + b2[k_pre, j_pre, i_pre] * n_theta_pre
-            + b3[k_pre, j_pre, i_pre] * n_phi_pre
+            b1_hat[k_pre, j_pre, i_pre] * n_r_pre
+            + b2_hat[k_pre, j_pre, i_pre] * n_theta_pre
+            + b3_hat[k_pre, j_pre, i_pre] * n_phi_pre
         )
         cos_theta_bn_pre = np.divide(np.abs(b_dot_n_pre), b_mag_pre, out=np.zeros_like(b_mag_pre), where=b_mag_pre > 0)
         cos_theta_bn_pre = np.clip(cos_theta_bn_pre, 0.0, 1.0)
@@ -401,8 +455,12 @@ def find_shocks_in_roi_mhd(
         u_sonic = np.divide(csonic, np.sqrt(np.maximum(1.0 - cs_sq_sr, 1e-12)))
         sr_sonic_mach = np.divide(np.abs(u_n1), u_sonic, out=np.zeros((), dtype=float), where=u_sonic > 0)
         va_sq_sr = np.divide(bsq1, w1 + bsq1, out=np.zeros((), dtype=float), where=(w1 + bsq1) > 0)
-        b_mag1 = np.sqrt(bsq1)
-        b_dot_n = b1[ku, ju, iu] * n_r[k, j, i] + b2[ku, ju, iu] * n_theta[k, j, i] + b3[ku, ju, iu] * n_phi[k, j, i]
+        b_mag1 = np.sqrt(b_lab_sq[ku, ju, iu])
+        b_dot_n = (
+            b1_hat[ku, ju, iu] * n_r[k, j, i]
+            + b2_hat[ku, ju, iu] * n_theta[k, j, i]
+            + b3_hat[ku, ju, iu] * n_phi[k, j, i]
+        )
         cos_theta_bn = np.divide(np.abs(b_dot_n), b_mag1, out=np.zeros((), dtype=float), where=b_mag1 > 0)
         cos_theta_bn = np.clip(cos_theta_bn, 0.0, 1.0)
         sin_theta_sq = np.maximum(0.0, 1.0 - cos_theta_bn**2)

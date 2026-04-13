@@ -2,6 +2,8 @@ import numpy as np
 import copy
 from numba import njit, prange
 
+from src.core.shock_v1 import compute_comoving_magnetic_geometry
+
 # ==============================================================================
 # JIT 编译的核心计算内核 (C++ 级速度)
 # ==============================================================================
@@ -120,7 +122,7 @@ def solve_steady_advection(roi_data, nonthermal_props, config):
     
     # 磁场
     if 'Bcc1' in roi_data:
-        Bsq = roi_data['Bcc1']**2 + roi_data['Bcc2']**2 + roi_data['Bcc3']**2
+        Bsq = compute_comoving_magnetic_geometry(roi_data)['b_sq_comoving']
     else:
         Bsq = roi_data['B1']**2 + roi_data['B2']**2 + roi_data['B3']**2
     B_mag = np.sqrt(Bsq).astype(np.float64)

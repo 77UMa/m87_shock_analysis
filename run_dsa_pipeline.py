@@ -5,9 +5,11 @@ import argparse
 import glob
 import multiprocessing as mp
 import os
+import shutil
 import sys
 import time
 import traceback
+import uuid
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
@@ -22,18 +24,41 @@ from src.workflows.workflowFull_v2 import process_snapshot
 from src.utils.paths import PATHS, ensure_dir, validate_paths, print_path_info
 
 
+def _resolve_generate_scratch_root(cli_scratch_dir=None):
+    if cli_scratch_dir:
+        return os.path.abspath(cli_scratch_dir)
+    if env_scratch_dir := os.environ.get("M87_SCRATCH_DIR"):
+        return os.path.abspath(env_scratch_dir)
+    return os.path.join(os.path.expanduser("~"), ".cache", "m87_dsa")
+
+
 def process_snapshot_wrapper(task_args):
     """Wrapper used by multiprocessing workers."""
-    filename, config, log_dir = task_args
+    filename, config, log_dir, scratch_run_dir = task_args
     basename = os.path.basename(filename)
     proc_logger = DUALogger(
         log_dir=log_dir,
         run_id=f"run_{time.strftime('%Y%m%d_%H%M%S')}_pid{os.getpid()}",
     )
 
+    local_input = None
+    local_task_dir = None
     start_time = time.time()
     try:
-        success = process_snapshot(filename, config, proc_logger)
+        local_task_dir = os.path.join(
+            scratch_run_dir,
+            f"{os.getpid()}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
+        )
+        local_input = os.path.join(local_task_dir, basename)
+
+        copy_start = time.time()
+        os.makedirs(local_task_dir, exist_ok=True)
+        shutil.copy2(filename, local_input)
+        copy_elapsed = time.time() - copy_start
+        proc_logger.human.info(f"Scratch copy: {basename} -> {local_input}")
+        proc_logger.human.time("Copy input to local scratch", copy_elapsed)
+
+        success = process_snapshot(local_input, config, proc_logger)
         elapsed = time.time() - start_time
         if success:
             return True, filename, elapsed
@@ -41,6 +66,21 @@ def process_snapshot_wrapper(task_args):
     except Exception as exc:
         error_msg = f"Error in {basename}: {exc}\n{traceback.format_exc()}"
         return False, filename, error_msg
+    finally:
+        if local_input and os.path.exists(local_input):
+            cleanup_start = time.time()
+            try:
+                os.remove(local_input)
+                cleanup_elapsed = time.time() - cleanup_start
+                proc_logger.human.info(f"Scratch cleanup file removed: {local_input}")
+                proc_logger.human.time("Cleanup local scratch file", cleanup_elapsed)
+            except Exception as exc:
+                proc_logger.human.warning(f"Failed to remove scratch input {local_input}: {exc}")
+        if local_task_dir and os.path.isdir(local_task_dir):
+            try:
+                os.rmdir(local_task_dir)
+            except Exception:
+                pass
 
 
 def create_default_config():
@@ -75,13 +115,26 @@ def create_default_config():
         },
         "nt_params": {
             "gamma": 4.0 / 3.0,
-            "x_inj": 3.0,
-            "eta_inj_e0": 5.0e-3,
-            "eps_nth_e0": 5.0e-2,
+            "x_inj": 3.6,
+            "eta_inj_e0": 2.0e-1,
+            "eps_nth_e0": 2.0e-1,
             "theta_bn_quench": 75.0,
             "theta_bn_width": 25.0,
             "sonic_mach_inj_min": 1.2,
             "inj_model": "pic_dual_cap",
+            "energy_budget_model": "total_internal_energy_excess",
+            "p_eff_model": "hybrid_classical_relativistic",
+            "classical_fast_mach_max": 1.8,
+            "relativistic_fast_mach_min": 3.0,
+            "theta_bn_parallel_max": 35.0,
+            "theta_bn_oblique_max": 60.0,
+            "sigma_rel_parallel_max": 1.0e-3,
+            "sigma_rel_oblique_max": 1.0e-2,
+            "p_eff_parallel": 2.35,
+            "p_eff_oblique": 2.8,
+            "p_eff_steep": 3.5,
+            "p_eff_floor": 1.5,
+            "p_eff_ceiling": 4.5,
             "sigma_crit": 0.1,
             "alpha_sigma": 2,
             "sironi_tran_coeff": 0.0016,
@@ -152,23 +205,40 @@ def cmd_generate_h5(args):
         logger.error(f"No files found: {file_pattern}")
         sys.exit(1)
 
+    scratch_root = _resolve_generate_scratch_root(getattr(args, "scratch_dir", None))
+    run_tag = time.strftime("%Y%m%d_%H%M%S")
+    scratch_run_dir = os.path.join(scratch_root, f"generate_h5_{run_tag}")
+    os.makedirs(scratch_run_dir, exist_ok=True)
+
     logger.info(f"Starting pipeline: {len(file_list)} files, {config['max_concurrent_tasks']} workers")
-    tasks = [(filepath, config, log_dir) for filepath in file_list]
+    logger.info(f"Scratch root: {scratch_root}")
+    logger.info(f"Scratch work dir (run): {scratch_run_dir}")
+    tasks = [(filepath, config, log_dir, scratch_run_dir) for filepath in file_list]
 
     start_time = time.time()
     successful = 0
     failed = 0
 
-    with mp.Pool(processes=config["max_concurrent_tasks"], maxtasksperchild=1) as pool:
-        for success, filename, info in pool.imap_unordered(process_snapshot_wrapper, tasks):
-            fname = os.path.basename(filename)
-            if success:
-                successful += 1
-                print(f"[SUCCESS] {fname} ({info:.2f}s)")
-            else:
-                failed += 1
-                print(f"[FAILED] {fname}")
-                logger.error(f"File {fname} failed details:\n{info}")
+    try:
+        with mp.Pool(processes=config["max_concurrent_tasks"], maxtasksperchild=1) as pool:
+            for success, filename, info in pool.imap_unordered(process_snapshot_wrapper, tasks):
+                fname = os.path.basename(filename)
+                if success:
+                    successful += 1
+                    print(f"[SUCCESS] {fname} ({info:.2f}s)")
+                else:
+                    failed += 1
+                    print(f"[FAILED] {fname}")
+                    logger.error(f"File {fname} failed details:\n{info}")
+    finally:
+        if os.path.isdir(scratch_run_dir):
+            cleanup_start = time.time()
+            try:
+                shutil.rmtree(scratch_run_dir)
+                logger.info(f"Scratch cleanup: removed run directory {scratch_run_dir}")
+                logger.info(f"Scratch cleanup elapsed: {time.time() - cleanup_start:.2f}s")
+            except Exception as exc:
+                logger.warning(f"Scratch cleanup failed for {scratch_run_dir}: {exc}")
 
     total_time = time.time() - start_time
     log_summary(logger, len(file_list), successful, failed, total_time)
@@ -200,6 +270,7 @@ def main():
     parser_generate.add_argument("--n-workers", type=int, help="Number of parallel workers")
     parser_generate.add_argument("--sigma-crit", type=float, help="Sigma suppression critical value")
     parser_generate.add_argument("--alpha-sigma", type=float, help="Sigma suppression steepness")
+    parser_generate.add_argument("--scratch-dir", help="Optional local scratch root for temporary generate_h5 input copies")
     parser_generate.add_argument("--show-paths", action="store_true", help="Show path configuration and exit")
     parser_generate.set_defaults(func=cmd_generate_h5)
 

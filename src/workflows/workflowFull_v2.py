@@ -90,6 +90,19 @@ def process_snapshot(filename, config, logger=None):
         nt_params.setdefault("theta_bn_width", 10.0)
         nt_params.setdefault("sonic_mach_inj_min", 1.5)
         nt_params.setdefault("inj_model", "pic_dual_cap")
+        nt_params.setdefault("energy_budget_model", "total_internal_energy_excess")
+        nt_params.setdefault("p_eff_model", "hybrid_classical_relativistic")
+        nt_params.setdefault("classical_fast_mach_max", 1.8)
+        nt_params.setdefault("relativistic_fast_mach_min", 3.0)
+        nt_params.setdefault("theta_bn_parallel_max", 35.0)
+        nt_params.setdefault("theta_bn_oblique_max", 60.0)
+        nt_params.setdefault("sigma_rel_parallel_max", 1.0e-3)
+        nt_params.setdefault("sigma_rel_oblique_max", 1.0e-2)
+        nt_params.setdefault("p_eff_parallel", 2.35)
+        nt_params.setdefault("p_eff_oblique", 2.8)
+        nt_params.setdefault("p_eff_steep", 3.5)
+        nt_params.setdefault("p_eff_floor", 1.5)
+        nt_params.setdefault("p_eff_ceiling", 4.5)
         shock_sr_cfg = dict(config.get("shock_sr", {}))
         stale_keys = [key for key in ("enable_sr_refine", "use_sr_refined_mask_for_nt") if key in shock_sr_cfg]
         if stale_keys:
@@ -121,6 +134,8 @@ def process_snapshot(filename, config, logger=None):
                 f"Derived units: L_unit={l_unit_val:.3e}, rho_unit={rho_unit:.3e}, u_unit={nt_params['u_unit']:.3e}, "
                 f"sironi_tran_coeff={nt_params['sironi_tran_coeff']:.4f}, sironi_tran_exp={nt_params['sironi_tran_exp']:.2f}, "
                 f"sironi_tran_delta_max={nt_params['sironi_tran_delta_max']:.2f}, inj_model={nt_params['inj_model']}, "
+                f"energy_budget_model={nt_params['energy_budget_model']}, "
+                f"p_eff_model={nt_params['p_eff_model']}, "
                 f"eta_inj_e0={nt_params['eta_inj_e0']:.2e}, eps_nth_e0={nt_params['eps_nth_e0']:.2e}"
             )
             dual_logger.ai.codepath("Physics branch", f"enable_advection={enable_advection}")
@@ -226,6 +241,8 @@ def process_snapshot(filename, config, logger=None):
             if np.size(c_grid) > 0:
                 c_vals = c_grid[nt_mask]
                 q_vals = q_grid[nt_mask]
+                p_eff_vals = nonthermal_props.get("p_eff_grid", np.array([]))
+                p_eff_vals = p_eff_vals[nt_mask] if np.size(p_eff_vals) > 0 else np.array([])
                 gamma_vals = gamma_min_grid[nt_mask] if np.size(gamma_min_grid) > 0 else np.array([1.0])
                 gamma_failure_vals = gamma_failure[nt_mask] if np.size(gamma_failure) > 0 else np.array([], dtype=int)
                 suppression_vals = sigma_suppression[nt_mask] if sigma_suppression is not None else None
@@ -261,6 +278,13 @@ def process_snapshot(filename, config, logger=None):
                 n_nth_eta_vals = n_nth_eta_vals[nt_mask] if np.size(n_nth_eta_vals) > 0 else np.array([])
                 n_nth_eps_vals = nonthermal_props.get("n_nth_eps_phys_grid", np.array([]))
                 n_nth_eps_vals = n_nth_eps_vals[nt_mask] if np.size(n_nth_eps_vals) > 0 else np.array([])
+                e_diss_e_vals = nonthermal_props.get("e_diss_e_grid", np.array([]))
+                e_diss_e_vals = e_diss_e_vals[nt_mask] if np.size(e_diss_e_vals) > 0 else np.array([])
+                e_diss_tot_vals = nonthermal_props.get("e_diss_tot_grid", np.array([]))
+                e_diss_tot_vals = e_diss_tot_vals[nt_mask] if np.size(e_diss_tot_vals) > 0 else np.array([])
+                u_nth_budget_vals = nonthermal_props.get("u_nth_budget_grid", np.array([]))
+                u_nth_budget_vals = u_nth_budget_vals[nt_mask] if np.size(u_nth_budget_vals) > 0 else np.array([])
+                energy_budget_model = nonthermal_props.get("energy_budget_model", nt_params.get("energy_budget_model", "unknown"))
                 limit_mode_vals = nonthermal_props.get("inj_limit_mode_grid", np.array([]))
                 limit_mode_vals = limit_mode_vals[nt_mask] if np.size(limit_mode_vals) > 0 else np.array([], dtype=int)
 
@@ -297,20 +321,29 @@ def process_snapshot(filename, config, logger=None):
                 if (
                     p_min_vals.size
                     and q_vals.size
+                    and p_eff_vals.size
                     and c_vals.size
                     and n_nth_vals.size
                     and n_nth_eta_vals.size
                     and n_nth_eps_vals.size
+                    and e_diss_e_vals.size
+                    and e_diss_tot_vals.size
+                    and u_nth_budget_vals.size
                     and gamma_vals.size
                     and limit_mode_vals.size
                 ):
                     dual_logger.human.log_stage_radiation_interface(
                         p_min=p_min_vals,
                         q_vals=q_vals,
+                        p_eff_vals=p_eff_vals,
                         unth_code=c_vals,
                         n_nth=n_nth_vals,
                         n_nth_eta=n_nth_eta_vals,
                         n_nth_eps=n_nth_eps_vals,
+                        energy_budget_model=energy_budget_model,
+                        e_diss_e=e_diss_e_vals,
+                        e_diss_tot=e_diss_tot_vals,
+                        u_nth_budget=u_nth_budget_vals,
                         gamma_min=gamma_vals,
                         limit_mode=limit_mode_vals,
                     )
@@ -321,7 +354,8 @@ def process_snapshot(filename, config, logger=None):
                         "unth_code_min": float(np.min(c_vals)) if c_vals.size else 0.0,
                         "unth_code_max": float(np.max(c_vals)) if c_vals.size else 0.0,
                         "q_median": float(np.median(q_vals)) if q_vals.size else 0.0,
-                        "p_median": float(np.median(q_vals - 1.0)) if q_vals.size else 0.0,
+                        "p_classical_median": float(np.median(q_vals - 1.0)) if q_vals.size else 0.0,
+                        "p_eff_median": float(np.median(p_eff_vals)) if p_eff_vals.size else 0.0,
                         "gamma_min_median": float(np.median(gamma_vals)) if gamma_vals.size else 1.0,
                         "gamma_min_min": float(np.min(gamma_vals)) if gamma_vals.size else 1.0,
                         "gamma_min_max": float(np.max(gamma_vals)) if gamma_vals.size else 1.0,

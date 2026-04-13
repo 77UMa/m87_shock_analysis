@@ -13,6 +13,7 @@ except ModuleNotFoundError:
 
 from src.core.nt_electron_v1 import (
     POWERLAW_GAMMA_MAX_DEFAULT,
+    _compute_effective_powerlaw_index,
     _compute_relativistic_k_inj,
     _compute_relativistic_p_min,
     calculate_nonthermal_electrons,
@@ -145,6 +146,8 @@ def test_save_h5_rejects_missing_mainline_mach_field():
     nonthermal_props = {
         "C_grid": np.zeros_like(roi_data["rho"]),
         "q_grid": np.full_like(roi_data["rho"], 2.5),
+        "q_budget_grid": np.full_like(roi_data["rho"], 3.2),
+        "p_eff_grid": np.full_like(roi_data["rho"], 2.2),
         "gamma_min_grid": np.ones_like(roi_data["rho"]),
         "gamma_min_grid_physical": np.ones_like(roi_data["rho"]),
         "gamma_min_failure_code_grid": np.zeros_like(roi_data["rho"], dtype=int),
@@ -168,8 +171,10 @@ def test_run_pipeline_default_config_omits_removed_classical_candidate_controls(
     assert "min_physical_mach" not in config["shock_params"]
     assert set(config["shock_params"].keys()) == {"gamma", "grad_p_filter_quantile", "march_cells"}
     assert config["nt_params"]["inj_model"] == "pic_dual_cap"
-    assert config["nt_params"]["eta_inj_e0"] == pytest.approx(1.0e-3)
-    assert config["nt_params"]["eps_nth_e0"] == pytest.approx(3.0e-3)
+    assert config["nt_params"]["energy_budget_model"] == "total_internal_energy_excess"
+    assert config["nt_params"]["p_eff_model"] == "hybrid_classical_relativistic"
+    assert config["nt_params"]["eta_inj_e0"] == pytest.approx(5.0e-3)
+    assert config["nt_params"]["eps_nth_e0"] == pytest.approx(2.0e-1)
 
 
 def test_process_snapshot_rejects_removed_classical_candidate_controls_in_config():
@@ -318,6 +323,87 @@ def test_pic_dual_cap_injection_is_capped_by_dual_constraints():
     assert np.isfinite(result["c_eps_grid"][0, 0, 0])
 
 
+def test_total_internal_energy_budget_is_exported_in_default_chain():
+    mask = np.ones((1, 1, 1), dtype=bool)
+    shock_properties = {
+        "mask": mask,
+        "mainline_mach": np.full((1, 1, 1), 3.0),
+        "rho1_code_grid": np.full((1, 1, 1), 2.0),
+        "press1_code_grid": np.full((1, 1, 1), 1.0),
+        "beta1_grid": np.full((1, 1, 1), 0.2),
+        "sr_sonic_mach": np.full((1, 1, 1), 5.0),
+        "theta_Bn": np.zeros((1, 1, 1)),
+        "rho2_code_grid": np.full((1, 1, 1), 4.0),
+        "press2_code_grid": np.full((1, 1, 1), 10.0),
+        "sample_boundary_clipped_grid": np.zeros((1, 1, 1), dtype=bool),
+        "sigma_grid": np.zeros((1, 1, 1)),
+    }
+
+    result = calculate_nonthermal_electrons(shock_properties, rho_unit=2.0, u_unit=18.0)
+    assert result["e_diss_tot_grid"][0, 0, 0] > 0.0
+    assert result["u_nth_budget_grid"][0, 0, 0] > 0.0
+    assert result["energy_budget_model"] == "total_internal_energy_excess"
+
+
+def test_energy_budget_model_changes_energy_limited_branch():
+    mask = np.ones((1, 1, 1), dtype=bool)
+    shock_properties = {
+        "mask": mask,
+        "mainline_mach": np.full((1, 1, 1), 3.0),
+        "rho1_code_grid": np.full((1, 1, 1), 2.0),
+        "press1_code_grid": np.full((1, 1, 1), 1.0),
+        "beta1_grid": np.full((1, 1, 1), 0.2),
+        "sr_sonic_mach": np.full((1, 1, 1), 5.0),
+        "theta_Bn": np.zeros((1, 1, 1)),
+        "rho2_code_grid": np.full((1, 1, 1), 4.0),
+        "press2_code_grid": np.full((1, 1, 1), 10.0),
+        "sample_boundary_clipped_grid": np.zeros((1, 1, 1), dtype=bool),
+        "sigma_grid": np.zeros((1, 1, 1)),
+    }
+
+    result_total = calculate_nonthermal_electrons(
+        shock_properties,
+        rho_unit=2.0,
+        u_unit=18.0,
+        energy_budget_model="total_internal_energy_excess",
+        eta_inj_e0=1.0,
+        eps_nth_e0=3.0e-3,
+    )
+    result_electron = calculate_nonthermal_electrons(
+        shock_properties,
+        rho_unit=2.0,
+        u_unit=18.0,
+        energy_budget_model="electron_thermal_excess",
+        eta_inj_e0=1.0,
+        eps_nth_e0=3.0e-3,
+    )
+
+    assert result_total["u_nth_budget_grid"][0, 0, 0] != pytest.approx(result_electron["u_nth_budget_grid"][0, 0, 0])
+    assert result_total["n_nth_eps_phys_grid"][0, 0, 0] != pytest.approx(result_electron["n_nth_eps_phys_grid"][0, 0, 0])
+    assert result_total["n_nth_phys_grid"][0, 0, 0] != pytest.approx(result_electron["n_nth_phys_grid"][0, 0, 0])
+
+
+def test_nonthermal_rejects_unknown_energy_budget_model():
+    mask = np.ones((1, 1, 1), dtype=bool)
+    shock_properties = {
+        "mask": mask,
+        "mainline_mach": np.full((1, 1, 1), 3.0),
+        "rho1_code_grid": np.full((1, 1, 1), 2.0),
+        "press1_code_grid": np.full((1, 1, 1), 1.0),
+        "beta1_grid": np.full((1, 1, 1), 1.0),
+        "sr_sonic_mach": np.full((1, 1, 1), 3.0),
+        "rho2_code_grid": np.full((1, 1, 1), 2.0),
+        "press2_code_grid": np.full((1, 1, 1), 4.0),
+        "sample_boundary_clipped_grid": np.zeros((1, 1, 1), dtype=bool),
+    }
+
+    with pytest.raises(ValueError, match="Unsupported energy_budget_model"):
+        calculate_nonthermal_electrons(
+            shock_properties,
+            energy_budget_model="invalid_budget",
+        )
+
+
 def test_relativistic_k_inj_matches_python_closure_cutoff_assumption():
     q = np.array([2.2])
     p_min = np.array([1.0])
@@ -325,6 +411,50 @@ def test_relativistic_k_inj_matches_python_closure_cutoff_assumption():
     k_inj_lower_cutoff = _compute_relativistic_k_inj(q, p_min, gamma_max=1.0e3)[0]
     assert k_inj > 0.0
     assert k_inj >= k_inj_lower_cutoff
+
+
+def test_effective_powerlaw_index_uses_classical_branch_for_weak_shocks():
+    p_eff = _compute_effective_powerlaw_index(
+        mainline_mach=np.array([1.5]),
+        p_classical=np.array([2.4]),
+        theta_bn=np.array([0.1]),
+        sigma=np.array([1.0e-4]),
+        classical_fast_mach_max=1.8,
+        relativistic_fast_mach_min=3.0,
+        theta_bn_parallel_max_deg=35.0,
+        theta_bn_oblique_max_deg=60.0,
+        sigma_rel_parallel_max=1.0e-3,
+        sigma_rel_oblique_max=1.0e-2,
+        p_eff_parallel=2.35,
+        p_eff_oblique=2.8,
+        p_eff_steep=3.5,
+        p_eff_floor=1.5,
+        p_eff_ceiling=4.5,
+    )
+    assert p_eff[0] == pytest.approx(2.4)
+
+
+def test_effective_powerlaw_index_uses_relativistic_classification_for_strong_shocks():
+    p_eff = _compute_effective_powerlaw_index(
+        mainline_mach=np.array([4.0, 4.0, 4.0]),
+        p_classical=np.array([0.8, 0.8, 0.8]),
+        theta_bn=np.array([np.deg2rad(20.0), np.deg2rad(50.0), np.deg2rad(80.0)]),
+        sigma=np.array([1.0e-4, 5.0e-3, 5.0e-2]),
+        classical_fast_mach_max=1.8,
+        relativistic_fast_mach_min=3.0,
+        theta_bn_parallel_max_deg=35.0,
+        theta_bn_oblique_max_deg=60.0,
+        sigma_rel_parallel_max=1.0e-3,
+        sigma_rel_oblique_max=1.0e-2,
+        p_eff_parallel=2.35,
+        p_eff_oblique=2.8,
+        p_eff_steep=3.5,
+        p_eff_floor=1.5,
+        p_eff_ceiling=4.5,
+    )
+    assert p_eff[0] == pytest.approx(2.35)
+    assert p_eff[1] == pytest.approx(2.8)
+    assert p_eff[2] == pytest.approx(3.5)
 
 
 def test_nonthermal_rejects_removed_mask_switch_control():
@@ -346,6 +476,27 @@ def test_nonthermal_rejects_removed_mask_switch_control():
             shock_properties,
             use_sr_refined_mask=True,
         )
+
+
+def test_nonthermal_returns_effective_powerlaw_grid():
+    mask = np.ones((1, 1, 1), dtype=bool)
+    shock_properties = {
+        "mask": mask,
+        "mainline_mach": np.full((1, 1, 1), 4.0),
+        "rho1_code_grid": np.full((1, 1, 1), 1.0),
+        "press1_code_grid": np.full((1, 1, 1), 1.0e-4),
+        "beta1_grid": np.full((1, 1, 1), 0.2),
+        "sr_sonic_mach": np.full((1, 1, 1), 5.0),
+        "theta_Bn": np.full((1, 1, 1), np.deg2rad(20.0)),
+        "rho2_code_grid": np.full((1, 1, 1), 4.0),
+        "press2_code_grid": np.full((1, 1, 1), 0.1),
+        "sample_boundary_clipped_grid": np.zeros((1, 1, 1), dtype=bool),
+        "sigma_grid": np.full((1, 1, 1), 1.0e-4),
+    }
+
+    result = calculate_nonthermal_electrons(shock_properties, rho_unit=2.0, u_unit=18.0)
+    assert result["p_eff_grid"][0, 0, 0] == pytest.approx(2.35)
+    assert result["q_budget_grid"][0, 0, 0] == pytest.approx(3.35)
 
 
 @pytest.mark.skipif(h5py is None, reason="h5py not installed")
@@ -395,6 +546,8 @@ def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
         "c_eta_grid": np.ones_like(roi_data["rho"]) * 1.0e-7,
         "c_eps_grid": np.ones_like(roi_data["rho"]) * 5.0e-8,
         "inj_limit_mode_grid": np.ones_like(roi_data["rho"], dtype=np.int16),
+        "energy_budget_model": "total_internal_energy_excess",
+        "p_eff_model": "hybrid_classical_relativistic",
         "inj_limit_modes": {"none": 0, "eta_cap": 1, "eps_cap": 2, "quenched_by_gate": 3, "invalid_or_boundary": 4},
     }
     nonthermal_props["gamma_min_grid"][0, 1, 3] = 4.2
@@ -403,6 +556,7 @@ def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
     config = {
         "shock_params": {"gamma": 4.0 / 3.0},
         "physics": {"spin": 0.98, "hslope": 0.3, "R0": 0.0},
+        "hdf5_options": {"include_3d_diagnostics": True},
     }
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -430,7 +584,11 @@ def test_save_h5_uses_gamma_min_grid_without_overwriting_valid_values():
             assert "ETA_INJ_E" in handle
             assert "EPS_NTH_E" in handle
             assert "E_DISS_E" in handle
+            assert "E_DISS_TOT" in handle
+            assert "U_NTH_BUDGET" in handle
             assert "INJ_GATE" in handle
+            assert "P_EFF" in handle
+            assert "Q_BUDGET" in handle
             assert "N_NTH_ETA" in handle
             assert "N_NTH_EPS" in handle
             assert "N_NTH" in handle
