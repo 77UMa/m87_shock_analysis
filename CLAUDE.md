@@ -3,6 +3,7 @@
 主模块（本文件夹）通过Mutagen双向传输对应服务器文件夹/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/
 Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77UMa/m87_shock_analysis 
 子模块 ./ipole-DSA 对应github项目 https://github.com/77UMa/ipole 
+
 # ⚠️ CRITICAL: Methodology Computational Physics&SWE
 区别通用软件工程后端开发和我们正在进行的计算物理项目的方法论：
 我正在开发计算天体物理代码，在引入/修正物理时需要区分两种情况。
@@ -26,30 +27,23 @@ Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77
 ### 3. Execution Rules
 - **LOCAL VS REMOTE**: 区分本地开发环境和远程服务器环境，这意味着不需要跑复杂验证，通过编译测试即可。
 
+### 4. Environment
+你现在在本地Windows环境，我建立了Mutagen双向同步，服务器端/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/
+Projects/MAD98_DSA_Postprocessing 文件夹等于你现在在的本地F:\Research\Shockwave\Code\m87_shock_analysis 文件夹.
+由于不在服务器环境，你在本地的验证跑编译验证就行。
 
 # Project Info
 ## 1. Project Context: M87 Jet DSA Model
 
 - **Scientific Goal**: Test if Diffusive Shock Acceleration (DSA) can explain M87 jet limb-brightening, as an alternative to the Magnetic Reconnection model (Yang et al. 2024).
     
-- **Core Physics**:
-    
-    - Shock detection via normal Mach number (Lovely & Haimes 1999) and entropy jump.
-        
-    - Steady-State Advection-Cooling Approximation for $N_{nth}$ distribution.
-        
-    - $\sigma$-suppression efficiency: $\xi_{\rm DSA}(\sigma) = \xi_0 \cdot [1 + (\sigma/\sigma_{\rm crit})^\alpha]^{-1}$.
-        
-- **Primary Branch**: `feature/sigma-suppression-methodB` (Active development for $\sigma$ effects).
-    
-
 ---
 
 ## 2. Technical Stack & Workflow
 
 - **Data Source**: Athena++ output (`.athdf`).
     
-- **Processing**: Python pipeline (`run_dsa_pipeline.py`, `run_sigma_sweep.py`).
+- **Processing**: Python pipeline (`run_dsa_pipeline.py`).
     
 - **Radiative Transfer**: `ipole-DSA` (Customized C-code for $C$ and $p$ mapping).
     
@@ -59,25 +53,23 @@ Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77
         
     - Execution/Sim: Remote Server (Sync via GitHub: `77UMa/m87_shock_analysis`).
 
+- **log**: generate_h5:`F:\Research\Shockwave\Code\m87_shock_analysis\OUTPUT\logs` compare_models:`F:\Research\Shockwave\Code\m87_shock_analysis\OUTPUT\logs_compareModels\logs`
+generate_h5的日志分为人类日志和AI日志，分别以`ai_run`和`human_run`开头
+
 ## 3. Communication & Memory Protocol
 
 - **Session Continuity**:
     
-    - Refer to `项目状态更新：M87喷流的激波加速模型验证.md` for the latest scientific baseline.
+    - Refer to `/docs/engineering_guide.md` and `/Report/M87_shock_report.tex` for the latest scientific baseline.
         
-    - If a task involves multiple steps, list the plan as a checklist and wait for user "GO".
-        
-- **Physical Constants**: Ensure all unit conversions between Athena++ (code units) and IPOLE (physical units) are cross-checked with `Xia et al. (2025)`.
-    
-
 ---
 
 ## 4. File Structure Shortcuts
 
 - **Pipeline Logic**: `workflowFull_v2.py`
     
-- **$\sigma$-Suppression Logic**: `nt_electron_v1.py` & `advection_v0.py`
+- **Nonthermal electron logic**: `nt_electron_v1.py` & `advection_v0.py`
     
-- **IPOLE Input Gen**: `compare_models_v0.py` (HDF5 structure)
+- **Radiation comparison**: `compare_models_v0.py` (HDF5 structure)
     
 - **External**: `pyathena` (for reading `.athdf`)

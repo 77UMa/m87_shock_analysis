@@ -24,6 +24,15 @@ from src.workflows.workflowFull_v2 import process_snapshot
 from src.utils.paths import PATHS, ensure_dir, validate_paths, print_path_info
 
 
+def _safe_ensure_dir(key, fallback_name):
+    try:
+        return ensure_dir(key)
+    except OSError:
+        fallback_path = os.path.join(script_dir, fallback_name)
+        os.makedirs(fallback_path, exist_ok=True)
+        return fallback_path
+
+
 def _resolve_generate_scratch_root(cli_scratch_dir=None):
     if cli_scratch_dir:
         return os.path.abspath(cli_scratch_dir)
@@ -92,8 +101,8 @@ def create_default_config():
     2. 默认 CPFS 路径
     """
     return {
-        "output_directory": ensure_dir("output"),
-        "data_output_directory": ensure_dir("data_output"),
+        "output_directory": _safe_ensure_dir("output", "OUTPUT"),
+        "data_output_directory": _safe_ensure_dir("data_output", os.path.join("OUTPUT", "data_output")),
         "data_directory": PATHS["data"],
         "ipole_executable_path": PATHS["ipole_std"],
         "roi_params": {
@@ -115,7 +124,8 @@ def create_default_config():
         },
         "nt_params": {
             "gamma": 4.0 / 3.0,
-            "x_inj": 3.6,
+            "x_inj": 1,
+            "r_high": 10.0,
             "eta_inj_e0": 2.0e-1,
             "eps_nth_e0": 2.0e-1,
             "theta_bn_quench": 75.0,
@@ -146,6 +156,9 @@ def create_default_config():
             "hslope": 1.0,
             "R0": 0.0,
             "enable_advection": False,
+            "advection_model": "sr_radial",
+            "advection_cooling_model": "synchrotron_local_sink",
+            "advection_line_sweeps": 6,
             "cooling_factor": 50.0,
             "advection_steps": 2000,
             "M_unit": 1e25,

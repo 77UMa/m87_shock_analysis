@@ -121,7 +121,7 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
     _human_info(logger, "Calculating shock properties")
     nt_params = dict(nt_params)
     deprecated_temp_fraction = nt_params.pop("electron_temp_fraction", None)
-    removed_nt_controls = [key for key in ("r_low", "r_high", "beta_crit") if key in nt_params]
+    removed_nt_controls = [key for key in ("r_low", "beta_crit") if key in nt_params]
     if removed_nt_controls:
         raise ValueError(
             "Removed beta-closure controls detected: "
@@ -131,6 +131,7 @@ def calculate_dsa_physics(roi_data, shock_params, nt_params, logger=None):
     nt_params.setdefault("sironi_tran_coeff", 0.0016)
     nt_params.setdefault("sironi_tran_exp", 3.6)
     nt_params.setdefault("sironi_tran_delta_max", 3.0)
+    nt_params.setdefault("r_high", 10.0)
     nt_params.setdefault("eta_inj_e0", 1.0e-3)
     nt_params.setdefault("eps_nth_e0", 3.0e-3)
     nt_params.setdefault("theta_bn_quench", 50.0)

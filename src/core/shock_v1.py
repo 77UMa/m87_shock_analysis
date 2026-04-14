@@ -137,7 +137,6 @@ def find_shocks_in_roi_mhd(
         if deprecated_controls:
             logger.ai.debug(f"Ignored extra controls={sorted(deprecated_controls.keys())}")
     
-    # --- 1. 数据准备 ---
     press = roi_data['press']
     rho = roi_data['rho']
     vel1, vel2, vel3 = roi_data['vel1'], roi_data['vel2'], roi_data['vel3']
@@ -154,7 +153,6 @@ def find_shocks_in_roi_mhd(
     
     nk, nj, ni = press.shape
     
-    # 坐标准备 (用于梯度修正)
     magnetic_geom = compute_comoving_magnetic_geometry(roi_data)
     r_coords = magnetic_geom["r_coords"]
     theta_coords = magnetic_geom["theta_coords"]
@@ -163,8 +161,6 @@ def find_shocks_in_roi_mhd(
     theta_grid = magnetic_geom["theta_grid"]
     sin_theta_grid = magnetic_geom["sin_theta_grid"]
 
-    # --- 2. 计算 MHD 核心物理量 ---
-    # a. 计算磁压与总压 [cite: 7836, 8412]
     b_sq = magnetic_geom["b_sq_comoving"]
     b_lab_sq = magnetic_geom["b_lab_sq"]
     b1_hat = magnetic_geom["b1_hat"]
@@ -173,17 +169,12 @@ def find_shocks_in_roi_mhd(
     p_mag = 0.5 * b_sq
     p_tot = press + p_mag
     
-
-    # --- 3. 计算 3D 梯度 (球面坐标系修正) ---
-    # np.gradient 返回顺序对应 (dim0, dim1, dim2) -> (phi, theta, r)
     grad_P_phi_raw, grad_P_theta_raw, grad_P_r_raw = _safe_axis_gradient(p_tot)
 
-    # 物理距离缩放
     dr = np.gradient(r_coords) if r_coords.size > 1 else np.ones_like(r_coords)
     dtheta = np.gradient(theta_coords) if theta_coords.size > 1 else np.ones_like(theta_coords)
     dphi = np.gradient(phi_coords) if phi_coords.size > 1 else np.ones_like(phi_coords)
 
-    # 广播坐标差
     dR_grid = dr[np.newaxis, np.newaxis, :]
     dT_grid = dtheta[np.newaxis, :, np.newaxis]
     dP_grid = dphi[:, np.newaxis, np.newaxis]
@@ -195,27 +186,23 @@ def find_shocks_in_roi_mhd(
     grad_P_mag = np.sqrt(grad_P_r**2 + grad_P_theta**2 + grad_P_phi**2) + 1e-30
 
 
-    # --- 4. 三道门候选点筛选 ---
-    # 法向量 n = grad(P_tot) / |grad(P_tot)| [cite: 7833]
+    # --- 4. Three Gates ---
+    # Normal n = grad(P_tot) / |grad(P_tot)| [cite: 7833]
     n_r, n_theta, n_phi = grad_P_r/grad_P_mag, grad_P_theta/grad_P_mag, grad_P_phi/grad_P_mag
     v_dot_n = vel1 * n_r + vel2 * n_theta + vel3 * n_phi
 
-    # Gate 1: 汇聚流门槛 (Compressibility Gate)
+    # Gate 1: (Compressibility Gate)
 
-    # 局部网格尺度 (沿法向的近似)
     dl_eff = np.abs(n_r * dR_grid + n_theta * r_grid * dT_grid + n_phi * r_grid * sin_theta_grid * dP_grid) + 1e-30
-    # 流体必须顺着压强梯度方向撞向高压
     compressibility_mask = v_dot_n > 0
     compressibility_count = int(np.sum(compressibility_mask))
 
-    # Gate 2: 间断强度门槛 (Discontinuity Gate)
-    # 压强梯度跨越网格的相对跳跃 > threshold
+    # Gate 2: (Discontinuity Gate)
     # relative_jump = |grad_P| * dl_eff / P_tot
     relative_jump = grad_P_mag * dl_eff / (p_tot + 1e-30)
     discontinuity_mask = relative_jump >= discontinuity_rel_jump_min
     discontinuity_count = int(np.sum(discontinuity_mask & compressibility_mask))
-    # Gate 3:  SRMHD-inspired局地马赫数初筛 (Smeared Local SR-Mach)
-    # 假定我们这里找到的马赫数是经过数值涂抹的局地马赫数，要求其超过一定阈值
+    # Gate 3:   (Smeared Local SR-Mach)
     pre_mach_mask = compressibility_mask & discontinuity_mask
     local_sr_mach = np.zeros_like(press)
     if np.any(pre_mach_mask):
@@ -259,13 +246,12 @@ def find_shocks_in_roi_mhd(
     smeared_mach_mask = local_sr_mach >= smeared_sr_mach_min
     smeared_mach_count = int(np.sum(smeared_mach_mask & pre_mach_mask))
 
-    # 综合三门
+
     candidate_mask = compressibility_mask & discontinuity_mask & smeared_mach_mask
 
     geom_candidate_mask = candidate_mask.copy()
     geom_candidate_count = int(np.sum(geom_candidate_mask))
 
-    # 打印筛选统计
     gate_stats = {
         "compressibility_gate": compressibility_count,
         "discontinuity_gate": discontinuity_count,
@@ -283,7 +269,7 @@ def find_shocks_in_roi_mhd(
     if logger:
         logger.ai.debug(f"Shock candidate marching: {len(candidate_indices)} cells to sample")
 
-    # --- 5. 稳健验证 (Gradient Marching) ---
+    # --- 5. (Gradient Marching) ---
     mainline_mach_grid = np.zeros_like(press)
     rho1_code_grid = np.zeros_like(press)
     press1_code_grid = np.zeros_like(press)
@@ -332,7 +318,6 @@ def find_shocks_in_roi_mhd(
     sr_reject_entropy_count = 0
     sr_accepted_count = 0
 
-    # 逻辑梯度用于索引回溯
     gk, gj, gi = grad_P_phi_raw, grad_P_theta_raw, grad_P_r_raw
 
     for k, j, i in candidate_indices:

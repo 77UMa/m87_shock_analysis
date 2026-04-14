@@ -74,7 +74,7 @@ def process_snapshot(filename, config, logger=None):
         nt_params.pop("electron_temp_fraction", None)
         nt_params["rho_unit"] = rho_unit
         nt_params["u_unit"] = rho_unit * c_light_cgs**2
-        removed_nt_controls = [key for key in ("r_low", "r_high", "beta_crit") if key in nt_params or key in physics_cfg]
+        removed_nt_controls = [key for key in ("r_low", "beta_crit") if key in nt_params or key in physics_cfg]
         if removed_nt_controls:
             raise ValueError(
                 "Removed beta-closure controls detected: "
@@ -84,6 +84,7 @@ def process_snapshot(filename, config, logger=None):
         nt_params.setdefault("sironi_tran_coeff", 0.0016)
         nt_params.setdefault("sironi_tran_exp", 3.6)
         nt_params.setdefault("sironi_tran_delta_max", 3.0)
+        nt_params.setdefault("r_high", 10.0)
         nt_params.setdefault("eta_inj_e0", 1.0e-3)
         nt_params.setdefault("eps_nth_e0", 3.0e-3)
         nt_params.setdefault("theta_bn_quench", 50.0)
@@ -128,6 +129,8 @@ def process_snapshot(filename, config, logger=None):
             }
         )
         enable_advection = physics_cfg.get("enable_advection", False)
+        advection_model = physics_cfg.get("advection_model", "sr_radial")
+        advection_cooling_model = physics_cfg.get("advection_cooling_model", "synchrotron_local_sink")
 
         if dual_logger:
             dual_logger.ai.debug(
@@ -138,7 +141,14 @@ def process_snapshot(filename, config, logger=None):
                 f"p_eff_model={nt_params['p_eff_model']}, "
                 f"eta_inj_e0={nt_params['eta_inj_e0']:.2e}, eps_nth_e0={nt_params['eps_nth_e0']:.2e}"
             )
-            dual_logger.ai.codepath("Physics branch", f"enable_advection={enable_advection}")
+            dual_logger.ai.codepath(
+                "Physics branch",
+                (
+                    f"enable_advection={enable_advection}, "
+                    f"advection_model={advection_model}, "
+                    f"advection_cooling_model={advection_cooling_model}"
+                ),
+            )
             dual_logger.human.info(
                 "SRMHD mainline config: "
                 f"sr_mach_min={shock_params['sr_mach_min']:.2f}, "
@@ -201,7 +211,13 @@ def process_snapshot(filename, config, logger=None):
         if enable_advection:
             if dual_logger:
                 dual_logger.human.info("Running advection-diffusion stage")
-                dual_logger.ai.codepath("Step 3", "advection enabled")
+                dual_logger.ai.codepath(
+                    "Step 3",
+                    (
+                        f"advection enabled: model={advection_model}, "
+                        f"cooling_model={advection_cooling_model}"
+                    ),
+                )
             try:
                 from src.core.advection_v0 import solve_steady_advection
 

@@ -173,7 +173,8 @@ def test_run_pipeline_default_config_omits_removed_classical_candidate_controls(
     assert config["nt_params"]["inj_model"] == "pic_dual_cap"
     assert config["nt_params"]["energy_budget_model"] == "total_internal_energy_excess"
     assert config["nt_params"]["p_eff_model"] == "hybrid_classical_relativistic"
-    assert config["nt_params"]["eta_inj_e0"] == pytest.approx(5.0e-3)
+    assert config["nt_params"]["r_high"] == pytest.approx(10.0)
+    assert config["nt_params"]["eta_inj_e0"] == pytest.approx(2.0e-1)
     assert config["nt_params"]["eps_nth_e0"] == pytest.approx(2.0e-1)
 
 

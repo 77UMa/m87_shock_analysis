@@ -175,6 +175,7 @@ def calculate_nonthermal_electrons(
     gamma=4.0 / 3.0,
     x_inj=3.5,
     xi_max=0.05,
+    r_high=10.0,
     eta_inj_e0=1.0e-3,
     eps_nth_e0=3.0e-3,
     theta_bn_quench=50.0,
@@ -216,7 +217,7 @@ def calculate_nonthermal_electrons(
     if logger:
         logger.ai.func_enter(
             "calculate_nonthermal_electrons",
-            {"gamma": gamma, "x_inj": x_inj, "xi_max": xi_max, "eta_inj_e0": eta_inj_e0,
+            {"gamma": gamma, "x_inj": x_inj, "xi_max": xi_max, "r_high": r_high, "eta_inj_e0": eta_inj_e0,
              "eps_nth_e0": eps_nth_e0, "theta_bn_quench": theta_bn_quench,
              "theta_bn_width": theta_bn_width, "sonic_mach_inj_min": sonic_mach_inj_min,
              "inj_model": inj_model, "energy_budget_model": energy_budget_model,
@@ -232,7 +233,7 @@ def calculate_nonthermal_electrons(
              "sironi_tran_delta_max": sironi_tran_delta_max,
              "shock_cells": int(np.sum(shock_properties["mask"]))},
         )
-    removed_controls = [key for key in ("r_low", "r_high", "beta_crit") if key in deprecated_controls]
+    removed_controls = [key for key in ("r_low", "beta_crit") if key in deprecated_controls]
     if removed_controls:
         raise ValueError(
             "Removed beta-closure controls detected: "
@@ -322,7 +323,8 @@ def calculate_nonthermal_electrons(
         with np.errstate(divide="ignore", invalid="ignore"):
             press1_over_rho1 = np.divide(press1, rho1, out=np.zeros_like(press1), where=rho1 > 0)
             compression = np.divide(rho2, rho1, out=np.zeros_like(rho2), where=rho1 > 0)
-            r1 = 80.0 * np.square(beta1) / (1.0 + np.square(beta1)) + 1.0 / (1.0 + np.square(beta1))
+            beta1_sq = np.square(beta1)
+            r1 = r_high * beta1_sq / (1.0 + beta1_sq) + 1.0 / (1.0 + beta1_sq)
             theta_e1 = press1_over_rho1 * mp_over_me / (1.0 + r1)
             theta_e2_ad = theta_e1 * np.cbrt(np.maximum(compression, 0.0))
             sironi_delta_raw = sironi_tran_coeff * np.power(np.maximum(sonic_mach, 0.0), sironi_tran_exp)
