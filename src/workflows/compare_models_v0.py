@@ -30,7 +30,7 @@ except ImportError as exc:
     sys.exit(1)
 
 
-FOV = 300
+FOV = 500
 PARAMS = {
     "thetacam": 163,
     "freqcgs": 86e9,

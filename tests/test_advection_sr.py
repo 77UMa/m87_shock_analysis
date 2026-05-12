@@ -1,29 +1,32 @@
+import os
+import sys
+
 import numpy as np
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from run_dsa_pipeline import create_default_config
-from src.core.advection_v0 import solve_steady_advection
+from src.core.advection_v0 import _build_shock_local_active_region, solve_steady_advection
 
 
-def _build_roi(shape=(1, 2, 4), radial_velocity=0.0, magnetic_field=0.0):
+def _build_roi(shape=(3, 3, 6), radial_velocity=0.0, magnetic_field=0.0):
     nk, nj, ni = shape
     zeros = np.zeros(shape, dtype=float)
-    vel1 = np.full(shape, radial_velocity, dtype=float)
-    bcc1 = np.full(shape, magnetic_field, dtype=float)
     return {
         "rho": np.ones(shape, dtype=float),
         "press": np.ones(shape, dtype=float),
-        "vel1": vel1,
+        "vel1": np.full(shape, radial_velocity, dtype=float),
         "vel2": zeros.copy(),
         "vel3": zeros.copy(),
-        "Bcc1": bcc1,
+        "Bcc1": np.full(shape, magnetic_field, dtype=float),
         "Bcc2": zeros.copy(),
         "Bcc3": zeros.copy(),
-        "x1f": np.linspace(10.0, 14.0, ni + 1),
-        "x2f": np.linspace(0.3, 1.3, nj + 1),
+        "x1f": np.linspace(10.0, 16.0, ni + 1),
+        "x2f": np.linspace(0.3, 1.5, nj + 1),
         "x3f": np.linspace(0.0, 2.0 * np.pi, nk + 1),
-        "x1v": np.linspace(10.5, 13.5, ni),
-        "x2v": np.linspace(0.55, 1.05, nj),
-        "x3v": np.linspace(np.pi, np.pi, nk),
+        "x1v": np.linspace(10.5, 15.5, ni),
+        "x2v": np.linspace(0.5, 1.3, nj),
+        "x3v": np.linspace(0.5, 5.5, nk),
         "Time": 0.0,
     }
 
@@ -42,80 +45,139 @@ def _build_nonthermal(shape, density, q=2.5):
     }
 
 
-def test_default_config_enables_relativistic_advection_model_selection():
+def _build_shock_props(shape, shock_cells):
+    mask = np.zeros(shape, dtype=bool)
+    sample_k2 = np.full(shape, -1, dtype=int)
+    sample_j2 = np.full(shape, -1, dtype=int)
+    sample_i2 = np.full(shape, -1, dtype=int)
+    for k, j, i, kd, jd, id_ in shock_cells:
+        mask[k, j, i] = True
+        sample_k2[k, j, i] = kd
+        sample_j2[k, j, i] = jd
+        sample_i2[k, j, i] = id_
+    return {
+        "mask": mask,
+        "sample_k2_grid": sample_k2,
+        "sample_j2_grid": sample_j2,
+        "sample_i2_grid": sample_i2,
+    }
+
+
+def test_default_config_enables_shock_local_sparse_transport_defaults():
     config = create_default_config()
     assert config["physics"]["advection_model"] == "sr_radial"
-    assert config["physics"]["advection_cooling_model"] == "synchrotron_local_sink"
-    assert config["physics"]["advection_line_sweeps"] >= 1
+    assert config["physics"]["advection_domain"] == "shock_local"
+    assert config["physics"]["advection_seed_mode"] == "downstream_sample"
+    assert config["physics"]["advection_shock_pad_r"] >= 0
 
 
-def test_sr_advection_reduces_to_local_source_without_transport_or_cooling():
-    roi_data = _build_roi(radial_velocity=0.0, magnetic_field=0.0)
-    source = np.array([[[1.0, 0.5, 2.0, 0.0], [0.2, 0.1, 0.3, 0.4]]], dtype=float)
-    nonthermal_props = _build_nonthermal(source.shape, source)
+def test_shock_local_active_region_keeps_cross_line_downstream_samples():
+    shape = (3, 3, 6)
+    density = np.zeros(shape, dtype=float)
+    density[0, 0, 1] = 5.0
+    density[2, 2, 4] = 3.0
+    shock_props = _build_shock_props(
+        shape,
+        [
+            (0, 0, 1, 1, 1, 2),
+            (2, 2, 4, 1, 1, 3),
+        ],
+    )
     config = create_default_config()
-    config["physics"]["enable_advection"] = True
+    active_mask, seed_mask, seed_value, bbox, stats = _build_shock_local_active_region(
+        shock_props,
+        density,
+        config["physics"],
+    )
+
+    assert stats["seed_samples_valid"] == 2
+    assert stats["seed_cells_unique"] == 2
+    assert seed_mask[1, 1, 2]
+    assert seed_mask[1, 1, 3]
+    assert seed_value[1, 1, 2] == 5.0
+    assert seed_value[1, 1, 3] == 3.0
+    assert np.any(active_mask)
+    assert bbox["i_max"] >= bbox["i_min"]
+
+
+def test_shock_local_advection_without_shock_seeds_stays_zero():
+    shape = (3, 3, 6)
+    roi_data = _build_roi(shape=shape, radial_velocity=0.4, magnetic_field=0.0)
+    nonthermal_props = _build_nonthermal(shape, np.zeros(shape, dtype=float))
+    shock_props = _build_shock_props(shape, [])
+    config = create_default_config()
     config["physics"]["cooling_factor"] = 1.0e30
 
-    result = solve_steady_advection(roi_data, nonthermal_props, config)
+    result = solve_steady_advection(roi_data, shock_props, nonthermal_props, config)
 
-    assert np.allclose(result["unth_code_grid"], source)
-    assert np.allclose(result["C_grid"], source)
-    assert np.allclose(result["q_grid"], nonthermal_props["q_grid"])
-    assert np.allclose(result["gamma_min_grid"], nonthermal_props["gamma_min_grid"])
+    assert np.allclose(result["unth_code_grid"], 0.0)
+    assert np.allclose(result["n_nth_phys_grid"], 0.0)
 
 
-def test_sr_advection_cooling_is_monotone_in_gamma_min():
-    shape = (1, 1, 4)
-    roi_data = _build_roi(shape=shape, radial_velocity=0.0, magnetic_field=1.0)
-    density = np.ones(shape, dtype=float)
-    nonthermal_props = _build_nonthermal(shape, density)
-    nonthermal_props["gamma_min_grid"][0, 0, :] = np.array([2.0, 4.0, 8.0, 16.0])
-    config = create_default_config()
-    config["physics"]["enable_advection"] = True
-    config["physics"]["cooling_factor"] = 0.1
-
-    result = solve_steady_advection(roi_data, nonthermal_props, config)
-    evolved = result["unth_code_grid"][0, 0, :]
-
-    assert np.all(evolved > 0.0)
-    assert np.all(np.diff(evolved) < 0.0)
-    assert np.all(evolved < density[0, 0, :])
-
-
-def test_sr_advection_updates_density_but_preserves_spectral_fields():
-    shape = (1, 1, 4)
+def test_shock_local_advection_propagates_from_cross_line_downstream_seed():
+    shape = (3, 3, 6)
     roi_data = _build_roi(shape=shape, radial_velocity=0.5, magnetic_field=0.0)
-    density = np.array([[[1.0, 0.0, 0.0, 0.0]]], dtype=float)
+    density = np.zeros(shape, dtype=float)
+    density[0, 0, 1] = 4.0
     nonthermal_props = _build_nonthermal(shape, density, q=2.7)
-    nonthermal_props["gamma_min_grid"][0, 0, :] = np.array([2.0, 3.0, 4.0, 5.0])
+    shock_props = _build_shock_props(shape, [(0, 0, 1, 1, 1, 2)])
     config = create_default_config()
-    config["physics"]["enable_advection"] = True
     config["physics"]["cooling_factor"] = 1.0e30
-    config["physics"]["advection_line_sweeps"] = 8
+    config["physics"]["advection_line_sweeps"] = 6
+    config["physics"]["advection_shock_pad_r"] = 2
+    config["physics"]["advection_shock_pad_theta"] = 1
+    config["physics"]["advection_shock_pad_phi"] = 1
 
-    result = solve_steady_advection(roi_data, nonthermal_props, config)
+    result = solve_steady_advection(roi_data, shock_props, nonthermal_props, config)
+    evolved = result["unth_code_grid"]
 
-    assert not np.allclose(result["unth_code_grid"], density)
-    assert np.allclose(result["unth_code_grid"], result["C_grid"])
+    assert evolved[1, 1, 2] >= 4.0
+    assert np.sum(evolved > 0.0) > 1
     assert np.allclose(result["q_grid"], nonthermal_props["q_grid"])
     assert np.allclose(result["p_eff_grid"], nonthermal_props["p_eff_grid"])
     assert np.allclose(result["gamma_min_grid"], nonthermal_props["gamma_min_grid"])
-    assert np.all(result["n_nth_phys_grid"] >= 0.0)
 
 
-def test_sr_advection_handles_inward_radial_flow_without_negative_densities():
-    shape = (1, 1, 5)
-    roi_data = _build_roi(shape=shape, radial_velocity=-0.4, magnetic_field=0.2)
-    density = np.array([[[0.0, 0.0, 0.2, 0.5, 1.0]]], dtype=float)
+def test_shock_local_rescale_does_not_fill_zero_initial_density_regions():
+    shape = (3, 3, 6)
+    roi_data = _build_roi(shape=shape, radial_velocity=0.5, magnetic_field=0.0)
+    density = np.zeros(shape, dtype=float)
+    density[0, 0, 1] = 2.0
     nonthermal_props = _build_nonthermal(shape, density)
+    shock_props = _build_shock_props(shape, [(0, 0, 1, 1, 1, 2)])
     config = create_default_config()
-    config["physics"]["enable_advection"] = True
-    config["physics"]["cooling_factor"] = 10.0
-    config["physics"]["advection_line_sweeps"] = 8
+    config["physics"]["cooling_factor"] = 1.0e30
+    config["physics"]["advection_shock_pad_r"] = 1
+    config["physics"]["advection_shock_pad_theta"] = 0
+    config["physics"]["advection_shock_pad_phi"] = 0
 
-    result = solve_steady_advection(roi_data, nonthermal_props, config)
+    result = solve_steady_advection(roi_data, shock_props, nonthermal_props, config)
 
-    assert np.all(np.isfinite(result["unth_code_grid"]))
-    assert np.all(result["unth_code_grid"] >= 0.0)
-    assert np.all(result["n_nth_phys_grid"] >= 0.0)
+    assert result["unth_code_grid"][1, 1, 2] > 0.0
+    assert result["n_nth_phys_grid"][1, 1, 2] == 0.0
+
+
+def test_shock_local_cooling_suppresses_solution_relative_to_no_cooling():
+    shape = (3, 3, 6)
+    roi_data = _build_roi(shape=shape, radial_velocity=0.5, magnetic_field=1.0)
+    density = np.zeros(shape, dtype=float)
+    density[0, 0, 1] = 3.0
+    nonthermal_props = _build_nonthermal(shape, density)
+    shock_props = _build_shock_props(shape, [(0, 0, 1, 1, 1, 2)])
+
+    config_hot = create_default_config()
+    config_hot["physics"]["cooling_factor"] = 1.0e30
+    config_hot["physics"]["advection_shock_pad_r"] = 2
+    config_hot["physics"]["advection_shock_pad_theta"] = 1
+    config_hot["physics"]["advection_shock_pad_phi"] = 1
+
+    config_cool = create_default_config()
+    config_cool["physics"]["cooling_factor"] = 0.1
+    config_cool["physics"]["advection_shock_pad_r"] = 2
+    config_cool["physics"]["advection_shock_pad_theta"] = 1
+    config_cool["physics"]["advection_shock_pad_phi"] = 1
+
+    no_cooling = solve_steady_advection(roi_data, shock_props, nonthermal_props, config_hot)
+    cooling = solve_steady_advection(roi_data, shock_props, nonthermal_props, config_cool)
+
+    assert np.sum(cooling["unth_code_grid"]) < np.sum(no_cooling["unth_code_grid"])

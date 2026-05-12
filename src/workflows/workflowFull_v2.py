@@ -2,6 +2,7 @@
 
 import os
 import time
+import traceback
 
 import numpy as np
 
@@ -221,7 +222,31 @@ def process_snapshot(filename, config, logger=None):
             try:
                 from src.core.advection_v0 import solve_steady_advection
 
-                nonthermal_props = solve_steady_advection(roi_data, nonthermal_props, config)
+                if dual_logger:
+                    dual_logger.ai.data(
+                        "advection.preflight",
+                        {
+                            "rho_shape": roi_data["rho"].shape,
+                            "vel1_shape": roi_data["vel1"].shape,
+                            "gamma_min_shape": nonthermal_props.get("gamma_min_grid", np.array([])).shape,
+                            "unth_code_shape": nonthermal_props.get(
+                                "unth_code_grid",
+                                nonthermal_props.get("C_grid", np.array([])),
+                            ).shape,
+                            "enable_advection": enable_advection,
+                            "advection_model": advection_model,
+                            "advection_domain": physics_cfg.get("advection_domain", "shock_local"),
+                            "advection_cooling_model": advection_cooling_model,
+                            "advection_line_sweeps": physics_cfg.get("advection_line_sweeps", 6),
+                            "advection_shock_pad_r": physics_cfg.get("advection_shock_pad_r", 8),
+                            "advection_shock_pad_theta": physics_cfg.get("advection_shock_pad_theta", 2),
+                            "advection_shock_pad_phi": physics_cfg.get("advection_shock_pad_phi", 2),
+                            "advection_seed_mode": physics_cfg.get("advection_seed_mode", "downstream_sample"),
+                            "cooling_factor": physics_cfg.get("cooling_factor", 50.0),
+                        },
+                    )
+
+                nonthermal_props = solve_steady_advection(roi_data, shock_props, nonthermal_props, config, dual_logger)
                 if dual_logger:
                     dual_logger.human.info("Advection-diffusion stage completed")
                     dual_logger.ai.codepath("Advection stage", "completed")
@@ -230,13 +255,31 @@ def process_snapshot(filename, config, logger=None):
                 if dual_logger:
                     dual_logger.human.warning(warning_msg)
                     dual_logger.ai.codepath("Advection stage", f"import failure: {exc}")
+                    dual_logger.ai.exception("Advection import failure traceback")
                 elif logger:
                     logger.warning(warning_msg)
             except Exception as exc:
-                warning_msg = f"Advection stage failed, using original nonthermal properties: {exc}"
+                traceback_text = traceback.format_exc()
+                warning_msg = (
+                    "Advection stage failed, using original nonthermal properties: "
+                    f"{type(exc).__name__}: {exc}"
+                )
                 if dual_logger:
                     dual_logger.human.warning(warning_msg)
-                    dual_logger.ai.codepath("Advection stage", f"runtime failure: {exc}")
+                    dual_logger.human.warning("Advection traceback written to AI log")
+                    dual_logger.ai.codepath(
+                        "Advection stage",
+                        f"runtime failure: type={type(exc).__name__}, message={exc}",
+                    )
+                    dual_logger.ai.exception("Advection runtime failure traceback")
+                    dual_logger.ai.debug(
+                        "Advection failure context: "
+                        f"rho_shape={roi_data['rho'].shape}, "
+                        f"vel1_shape={roi_data['vel1'].shape}, "
+                        f"gamma_min_shape={nonthermal_props.get('gamma_min_grid', np.array([])).shape}, "
+                        f"unth_code_shape={nonthermal_props.get('unth_code_grid', nonthermal_props.get('C_grid', np.array([]))).shape}, "
+                        f"traceback={traceback_text}"
+                    )
                 elif logger:
                     logger.warning(warning_msg)
         elif dual_logger:

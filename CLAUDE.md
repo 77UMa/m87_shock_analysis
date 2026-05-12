@@ -29,8 +29,7 @@ Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77
 
 ### 4. Environment
 你现在在本地Windows环境，我建立了Mutagen双向同步，服务器端/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/
-Projects/MAD98_DSA_Postprocessing 文件夹等于你现在在的本地F:\Research\Shockwave\Code\m87_shock_analysis 文件夹.
-由于不在服务器环境，你在本地的验证跑编译验证就行。
+Projects/MAD98_DSA_Postprocessing 文件夹等于你现在在的本地F:\Research\Shockwave\Code\m87_shock_analysis 文件夹。本地笔记本的算力和环境不支持使用真实数据跑验证，如果需要使用真实数据验证，就指定验证脚本和日志输出位置，我在服务器上跑。否则就设计简单的数据进行验证或者跑编译验证就行。
 
 # Project Info
 ## 1. Project Context: M87 Jet DSA Model
