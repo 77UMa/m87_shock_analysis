@@ -242,6 +242,12 @@ def process_snapshot(filename, config, logger=None):
                             "advection_shock_pad_theta": physics_cfg.get("advection_shock_pad_theta", 2),
                             "advection_shock_pad_phi": physics_cfg.get("advection_shock_pad_phi", 2),
                             "advection_seed_mode": physics_cfg.get("advection_seed_mode", "downstream_sample"),
+                            "advection_injection_layer": physics_cfg.get(
+                                "advection_injection_layer", "downstream_sample"
+                            ),
+                            "advection_tau_inj_cell_crossing_fraction": physics_cfg.get(
+                                "advection_tau_inj_cell_crossing_fraction", 1.0e-3
+                            ),
                             "cooling_factor": physics_cfg.get("cooling_factor", 50.0),
                         },
                     )
@@ -249,6 +255,25 @@ def process_snapshot(filename, config, logger=None):
                 nonthermal_props = solve_steady_advection(roi_data, shock_props, nonthermal_props, config, dual_logger)
                 if dual_logger:
                     dual_logger.human.info("Advection-diffusion stage completed")
+                    coverage_diag = nonthermal_props.get("advection_coverage_diagnostics", {})
+                    active_diag = nonthermal_props.get("advection_active_region_stats", {})
+                    if active_diag:
+                        dual_logger.human.info(
+                            "Advection source budget: "
+                            f"source_cells={active_diag.get('source_cells_unique', 0)}, "
+                            f"active_fraction={active_diag.get('active_fraction', 0.0):.3e}, "
+                            f"input={active_diag.get('source_input_budget', 0.0):.3e}, "
+                            f"remapped={active_diag.get('source_remapped_budget', 0.0):.3e}, "
+                            f"rel_err={active_diag.get('source_budget_relative_error', 0.0):.3e}"
+                        )
+                    if coverage_diag:
+                        dual_logger.human.info(
+                            "Advection coverage: "
+                            f"shock_unth_nonzero_ratio={coverage_diag.get('shock_unth_nonzero_ratio', 0.0):.3e}, "
+                            f"seed_unth_nonzero_ratio={coverage_diag.get('seed_unth_nonzero_ratio', 0.0):.3e}, "
+                            f"active_unth_nonzero_ratio={coverage_diag.get('active_unth_nonzero_ratio', 0.0):.3e}, "
+                            f"emissivity_weighted_coverage={coverage_diag.get('emissivity_weighted_coverage', 0.0):.3e}"
+                        )
                     dual_logger.ai.codepath("Advection stage", "completed")
             except ImportError as exc:
                 warning_msg = f"Advection module import failed, stage skipped: {exc}"
@@ -420,6 +445,8 @@ def process_snapshot(filename, config, logger=None):
                         "gamma_min_max": float(np.max(gamma_vals)) if gamma_vals.size else 1.0,
                         "gamma_valid_fraction": float(np.mean(gamma_failure_vals == 0)) if gamma_failure_vals.size else 1.0,
                         "gamma_fallback_risk_count": int(np.sum(gamma_vals <= 1.0)) if gamma_vals.size else 0,
+                        "advection_active_region": nonthermal_props.get("advection_active_region_stats", {}),
+                        "advection_coverage": nonthermal_props.get("advection_coverage_diagnostics", {}),
                     },
                 )
 

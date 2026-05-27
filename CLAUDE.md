@@ -3,6 +3,7 @@
 主模块（本文件夹）通过Mutagen双向传输对应服务器文件夹/cpfs01/projects-HDD/cfff-a7e284de52b3_HDD/cyh_22307110238/
 Projects/MAD98_DSA_Postprocessing ，并对应github项目 https://github.com/77UMa/m87_shock_analysis 
 子模块 ./ipole-DSA 对应github项目 https://github.com/77UMa/ipole 
+当前主开发分支是 `physics/sr-advection`
 
 # ⚠️ CRITICAL: Methodology Computational Physics&SWE
 区别通用软件工程后端开发和我们正在进行的计算物理项目的方法论：
@@ -53,13 +54,13 @@ Projects/MAD98_DSA_Postprocessing 文件夹等于你现在在的本地F:\Researc
     - Execution/Sim: Remote Server (Sync via GitHub: `77UMa/m87_shock_analysis`).
 
 - **log**: generate_h5:`F:\Research\Shockwave\Code\m87_shock_analysis\OUTPUT\logs` compare_models:`F:\Research\Shockwave\Code\m87_shock_analysis\OUTPUT\logs_compareModels\logs`
-generate_h5的日志分为人类日志和AI日志，分别以`ai_run`和`human_run`开头
+`.log` 文件是人类详细日志；真正给 AI/脚本读取的是 `ai_events*.jsonl` 结构化事件日志。HDF5 大文件仍放在既有 data output 位置，不和 Mutagen 同步日志目录混放。
 
 ## 3. Communication & Memory Protocol
 
 - **Session Continuity**:
     
-    - Refer to `/docs/engineering_guide.md` and `/Report/M87_shock_report.tex` for the latest scientific baseline.
+    - Refer to `/docs/engineering_guide.md` and `/Report/M87_shock_report.tex` for the current scientific baseline.
         
 ---
 
@@ -68,6 +69,9 @@ generate_h5的日志分为人类日志和AI日志，分别以`ai_run`和`human_r
 - **Pipeline Logic**: `workflowFull_v2.py`
     
 - **Nonthermal electron logic**: `nt_electron_v1.py` & `advection_v0.py`
+- **Current advection code path**: `advection_v0.py` 使用 `shock_local` finite-`tau_inj` relaxation source solve；source budget 按 cell volume 守恒 remap 到 downstream sample
+- **Scientific status of advection**: 当前 relaxation 主线已修复 kernelized seeding 的 `UNTH` 非守恒放大，但真实 compare_models 仍有离散串珠/喷射状结构，不能当作科学基线
+- **Do not retry by scaling knobs only**: 不要恢复 kernel seeding，也不要继续靠扩大 active region 或 sweep 数补救；若继续，应先诊断 source/active/final `UNTH` 连通性或转向物理可达域/流线输运
     
 - **Radiation comparison**: `compare_models_v0.py` (HDF5 structure)
     

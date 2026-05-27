@@ -1,6 +1,8 @@
 """Compare thermal, reconnection, and shock-DSA image models."""
 
+import csv
 import glob
+import json
 import logging
 import os
 import shutil
@@ -21,6 +23,7 @@ if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
 from src.utils.logging_config import setup_logging
+from src.utils.ai_event_log import AIEventLogger
 from src.utils.paths import PATHS
 
 try:
@@ -42,6 +45,58 @@ PARAMS = {
     "nx": FOV,
     "ny": FOV,
 }
+
+
+def _sanitize_run_label(label):
+    if not label:
+        return None
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(label))
+    return safe.strip("_") or None
+
+
+def _flush_logger(logger):
+    if not logger:
+        return
+    for handler in logger.handlers:
+        handler.flush()
+
+
+def _savefig_atomic(fig, path, **kwargs):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    root, ext = os.path.splitext(path)
+    tmp_path = f"{root}.tmp{ext}"
+    fig.savefig(tmp_path, **kwargs)
+    with open(tmp_path, "rb") as handle:
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, path)
+
+
+def _write_flux_statistics(plot_dir, run_tag, flux_rows, elapsed, logger=None):
+    csv_path = os.path.join(plot_dir, "flux_statistics.csv")
+    json_path = os.path.join(plot_dir, "flux_statistics.json")
+    tmp_csv = os.path.join(plot_dir, ".flux_statistics.tmp.csv")
+    tmp_json = os.path.join(plot_dir, ".flux_statistics.tmp.json")
+
+    with open(tmp_csv, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["model", "label", "flux_jy", "runtime_s"])
+        writer.writeheader()
+        for row in flux_rows:
+            writer.writerow(row)
+    os.replace(tmp_csv, csv_path)
+
+    payload = {
+        "run_tag": run_tag,
+        "flux_statistics": flux_rows,
+        "runtime_s": elapsed,
+    }
+    with open(tmp_json, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=True)
+    os.replace(tmp_json, json_path)
+
+    if logger:
+        logger.info(f"Flux statistics saved to: {csv_path}")
+        logger.info(f"Flux statistics saved to: {json_path}")
+    return csv_path, json_path
 
 
 def _default_metadata_output() -> str:
@@ -80,7 +135,7 @@ def discover_input_h5(input_h5=None):
     return candidates[0]
 
 
-def run_ipole(input_file, output_file, ipole_bin, emission_type=None, logger=None):
+def run_ipole(input_file, output_file, ipole_bin, emission_type=None, logger=None, ai_log=None, model=None):
     args = PARAMS.copy()
     args["dump"] = input_file
     args["outfile"] = output_file
@@ -92,6 +147,18 @@ def run_ipole(input_file, output_file, ipole_bin, emission_type=None, logger=Non
         logger.info(f"Starting IPOLE: {label} (emission_type={emission_type})")
     else:
         print(f"\n>>> Running IPOLE: {label}")
+    if ai_log:
+        ai_log.emit(
+            "ipole_start",
+            stage="compare_models",
+            model=model,
+            params={
+                "input_file": input_file,
+                "output_file": output_file,
+                "emission_type": emission_type,
+                "ipole_bin": ipole_bin,
+            },
+        )
 
     def _log_ipole_line(line):
         if logger:
@@ -102,6 +169,16 @@ def run_ipole(input_file, output_file, ipole_bin, emission_type=None, logger=Non
     elapsed = time.time() - start
     if logger:
         logger.info(f"Finished IPOLE: {label} ({elapsed:.1f}s)")
+        _flush_logger(logger)
+    if ai_log:
+        ai_log.emit(
+            "ipole_complete",
+            stage="compare_models",
+            status="ok",
+            model=model,
+            metrics={"runtime_s": elapsed},
+        )
+        ai_log.emit_artifact(output_file, kind="hdf5", stage="compare_models", model=model)
     return elapsed
 
 
@@ -173,6 +250,8 @@ def _copy_artifact_to_output(work_file, output_file, logger=None):
 
 def main(args=None):
     run_timestamp = time.strftime('%Y%m%d_%H%M%S')
+    run_label = _sanitize_run_label(getattr(args, "run_label", None))
+    run_tag = f"{run_label}_{run_timestamp}" if run_label else run_timestamp
     ipole_dsa_bin = getattr(args, "ipole_dsa_bin", None) or PATHS["ipole_dsa"]
     input_h5 = discover_input_h5(getattr(args, "input_h5", None))
     output_dir = getattr(args, "output_dir", None) or _default_metadata_output()
@@ -187,9 +266,11 @@ def main(args=None):
     logger, log_file = setup_logging(
         log_dir=log_dir,
         log_level=logging.INFO,
-        log_name=f"compare_models_{run_timestamp}.log",
+        log_name=f"run_detail_{run_tag}.log",
         logger_name="CompareModels",
     )
+    ai_log_file = os.path.join(log_dir, f"ai_events_{run_tag}.jsonl")
+    ai_log = AIEventLogger(ai_log_file, run_label=run_label, stage="compare_models")
 
     logger.info("=" * 60)
     logger.info("Compare Models Run Started")
@@ -197,22 +278,56 @@ def main(args=None):
     logger.info(f"  Metadata Output Dir : {output_dir}")
     logger.info(f"  Large-data Output   : {data_output_dir}")
     logger.info(f"  Scratch Work Dir    : {work_data_dir if scratch_dir else 'disabled'}")
+    logger.info(f"  Run Label           : {run_label or 'none'}")
     logger.info(f"  Models              : {selected_models}")
     logger.info(f"  IPOLE DSA bin       : {ipole_dsa_bin}")
     logger.info(f"  IPOLE DSA exists    : {os.path.exists(ipole_dsa_bin)}")
     logger.info(f"  IPOLE DSA executable: {os.access(ipole_dsa_bin, os.X_OK) if os.path.exists(ipole_dsa_bin) else False}")
     logger.info(f"  Params              : {PARAMS}")
     logger.info(f"  Log file            : {log_file}")
+    logger.info(f"  AI event log        : {ai_log_file}")
     logger.info("=" * 60)
+    _flush_logger(logger)
+    ai_log.emit(
+        "run_start",
+        params={
+            "input_h5": input_h5,
+            "metadata_output_dir": output_dir,
+            "large_data_output_dir": data_output_dir,
+            "scratch_work_dir": work_data_dir if scratch_dir else None,
+            "models": selected_models,
+            "ipole_dsa_bin": ipole_dsa_bin,
+            "params": PARAMS,
+        },
+    )
 
     if not input_h5 or not os.path.exists(input_h5):
         logger.error("No valid input H5 found for compare_models.")
         logger.error("Pass --input-h5 explicitly or ensure *_dsa_input.h5 exists under the data output tree.")
+        ai_log.emit(
+            "validation_failed",
+            level="fatal",
+            status="failed",
+            error="missing_input_h5",
+            params={"input_h5": input_h5},
+        )
+        ai_log.close()
+        _flush_logger(logger)
         return
     if not os.path.exists(ipole_dsa_bin):
         logger.error(f"ipole-DSA executable not found: {ipole_dsa_bin}")
         logger.error("Set M87_IPOLE_DSA to a valid ipole-DSA binary before running compare_models.")
+        ai_log.emit(
+            "validation_failed",
+            level="fatal",
+            status="failed",
+            error="missing_ipole_dsa_binary",
+            params={"ipole_dsa_bin": ipole_dsa_bin},
+        )
+        ai_log.close()
+        _flush_logger(logger)
         return
+    ai_log.emit_artifact(input_h5, kind="hdf5", fatal_if_empty=True)
 
     start_total = time.time()
     h5_thermal_in = os.path.join(work_data_dir, "input_thermal.h5")
@@ -232,10 +347,20 @@ def main(args=None):
                 prepare_input(input_h5, h5_thermal_in, mode="none", logger=logger)
                 if scratch_dir:
                     logger.info("Model A copied source H5 to scratch and will run IPOLE from local scratch.")
-                elapsed["A"] = run_ipole(h5_thermal_in, out_thermal, ipole_dsa_bin, emission_type=1, logger=logger)
+                elapsed["A"] = run_ipole(
+                    h5_thermal_in,
+                    out_thermal,
+                    ipole_dsa_bin,
+                    emission_type=1,
+                    logger=logger,
+                    ai_log=ai_log,
+                    model="A",
+                )
                 _copy_artifact_to_output(out_thermal, final_out_thermal, logger=logger)
+                ai_log.emit_artifact(final_out_thermal, kind="hdf5", model="A")
             except Exception as exc:
                 logger.error(f"Model A failed: {exc}", exc_info=True)
+                ai_log.emit("model_failed", level="error", status="failed", model="A", error=str(exc))
                 elapsed["A"] = None
         else:
             elapsed["A"] = None
@@ -247,10 +372,20 @@ def main(args=None):
                 prepare_input(input_h5, h5_reconn_in, mode="none", logger=logger)
                 if scratch_dir:
                     logger.info("Model B copied source H5 to scratch and will run IPOLE from local scratch.")
-                elapsed["B"] = run_ipole(h5_reconn_in, out_reconn, ipole_dsa_bin, emission_type=3, logger=logger)
+                elapsed["B"] = run_ipole(
+                    h5_reconn_in,
+                    out_reconn,
+                    ipole_dsa_bin,
+                    emission_type=3,
+                    logger=logger,
+                    ai_log=ai_log,
+                    model="B",
+                )
                 _copy_artifact_to_output(out_reconn, final_out_reconn, logger=logger)
+                ai_log.emit_artifact(final_out_reconn, kind="hdf5", model="B")
             except Exception as exc:
                 logger.error(f"Model B failed: {exc}", exc_info=True)
+                ai_log.emit("model_failed", level="error", status="failed", model="B", error=str(exc))
                 elapsed["B"] = None
         else:
             elapsed["B"] = None
@@ -266,10 +401,20 @@ def main(args=None):
                 else:
                     shock_input = input_h5
                     logger.info("Model C uses the source H5 directly; no shock-side input copy is needed.")
-                elapsed["C"] = run_ipole(shock_input, out_shock, ipole_dsa_bin, emission_type=None, logger=logger)
+                elapsed["C"] = run_ipole(
+                    shock_input,
+                    out_shock,
+                    ipole_dsa_bin,
+                    emission_type=None,
+                    logger=logger,
+                    ai_log=ai_log,
+                    model="C",
+                )
                 _copy_artifact_to_output(out_shock, final_out_shock, logger=logger)
+                ai_log.emit_artifact(final_out_shock, kind="hdf5", model="C")
             except Exception as exc:
                 logger.error(f"Model C failed: {exc}", exc_info=True)
+                ai_log.emit("model_failed", level="error", status="failed", model="C", error=str(exc))
                 elapsed["C"] = None
         else:
             elapsed["C"] = None
@@ -285,9 +430,18 @@ def main(args=None):
             logger.info(f"  Model {model}: {status}")
         logger.info(f"  Total elapsed: {time.time() - start_total:.1f}s")
         logger.info("=" * 60)
+        _flush_logger(logger)
 
         if all(model not in selected_models or runtime is None for model, runtime in elapsed.items()):
             logger.error(f"All requested compare_models runs failed for models={selected_models}. Skip plot generation.")
+            ai_log.emit(
+                "validation_failed",
+                level="fatal",
+                status="failed",
+                error="all_requested_models_failed",
+                metrics={"elapsed": elapsed},
+            )
+            _flush_logger(logger)
             return
 
         model_specs = {
@@ -310,20 +464,63 @@ def main(args=None):
         successful_models = [model for model in selected_models if elapsed.get(model) is not None]
         if not successful_models:
             logger.error("No successful model run available for flux report/plot generation.")
+            ai_log.emit(
+                "validation_failed",
+                level="fatal",
+                status="failed",
+                error="no_successful_model_for_flux_report",
+                metrics={"elapsed": elapsed},
+            )
+            _flush_logger(logger)
             return
 
         images = {}
         for model in successful_models:
             img, _ = load_intensity(model_specs[model]["load_path"], logger=logger)
             images[model] = img
+            ai_log.emit(
+                "image_loaded",
+                model=model,
+                metrics={
+                    "sum": float(np.sum(img)),
+                    "max": float(np.max(img)),
+                    "positive_pixels": int(np.count_nonzero(img > 0.0)),
+                },
+                params={"load_path": model_specs[model]["load_path"]},
+            )
 
+        plot_dir = os.path.join(output_dir, "plots", f"compare_models_{run_tag}")
+        os.makedirs(plot_dir, exist_ok=True)
+        flux_rows = []
         logger.info("FLUX STATISTICS (Jy):")
         for model in successful_models:
-            logger.info(f"  {model_specs[model]['label']:<28}: {np.sum(images[model]):.4f}")
+            flux = float(np.sum(images[model]))
+            logger.info(f"  {model_specs[model]['label']:<28}: {flux:.4f}")
+            flux_rows.append(
+                {
+                    "model": model,
+                    "label": model_specs[model]["label"],
+                    "flux_jy": flux,
+                    "runtime_s": elapsed.get(model),
+                }
+            )
+        flux_csv, flux_json = _write_flux_statistics(plot_dir, run_tag, flux_rows, elapsed, logger=logger)
+        ai_log.emit("ipole_flux_summary", metrics={"flux_statistics": flux_rows})
+        ai_log.emit_artifact(flux_csv, kind="csv")
+        ai_log.emit_artifact(flux_json, kind="json")
+        _flush_logger(logger)
 
         valid_max = max(np.max(images[model]) for model in successful_models)
         if valid_max <= 0:
             logger.error("No positive image intensity available after compare_models runs. Skip plot generation.")
+            ai_log.emit(
+                "validation_failed",
+                level="fatal",
+                status="failed",
+                error="no_positive_image_intensity",
+                metrics={"valid_max": float(valid_max)},
+            )
+            _flush_logger(logger)
             return
 
         logger.info("Generating comparison plot...")
@@ -370,16 +567,17 @@ def main(args=None):
                 plt.colorbar(im, ax=axes[idx])
 
         plt.tight_layout()
-        plot_dir = os.path.join(output_dir, "plots", f"compare_models_{run_timestamp}")
-        os.makedirs(plot_dir, exist_ok=True)
         plot_path = os.path.join(plot_dir, f"comparison_results_mhd_native_fov{FOV}.png")
-        plt.savefig(plot_path)
+        _savefig_atomic(fig, plot_path)
         plt.close(fig)
+        ai_log.emit_artifact(plot_path, kind="png")
 
         logger.info(f"Plot saved to: {plot_path}")
         logger.info(f"Metadata results saved to: {output_dir}")
         logger.info(f"Large HDF5 results saved to: {data_output_dir}")
         logger.info(f"Log saved to: {log_file}")
+        ai_log.emit("run_complete", status="ok", metrics={"elapsed": elapsed, "total_elapsed_s": time.time() - start_total})
+        _flush_logger(logger)
     finally:
         if scratch_dir and work_data_dir and os.path.isdir(work_data_dir):
             try:
@@ -387,3 +585,5 @@ def main(args=None):
                 logger.info(f"Removed scratch work dir: {work_data_dir}")
             except Exception as exc:
                 logger.warning(f"Failed to remove scratch work dir {work_data_dir}: {exc}")
+        ai_log.close()
+        _flush_logger(logger)

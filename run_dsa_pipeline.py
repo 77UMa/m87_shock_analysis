@@ -24,6 +24,13 @@ from src.workflows.workflowFull_v2 import process_snapshot
 from src.utils.paths import PATHS, ensure_dir, validate_paths, print_path_info
 
 
+def _sanitize_run_label(label):
+    if not label:
+        return None
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(label))
+    return safe.strip("_") or None
+
+
 def _safe_ensure_dir(key, fallback_name):
     try:
         return ensure_dir(key)
@@ -164,13 +171,15 @@ def create_default_config():
             "advection_shock_pad_theta": 2,
             "advection_shock_pad_phi": 2,
             "advection_seed_mode": "downstream_sample",
-            "cooling_factor": 50.0,
+            "advection_injection_layer": "downstream_sample",
+            "advection_tau_inj_cell_crossing_fraction": 1.0e-3,
+            "cooling_factor": 1e30,
             "advection_steps": 2000,
             "M_unit": 1e25,
             "MBH_solar": 6.2e9,
         },
         "hdf5_options": {
-            "include_3d_diagnostics": False,
+            "include_3d_diagnostics": True,
         },
         "max_concurrent_tasks": 5,
     }
@@ -197,15 +206,25 @@ def cmd_generate_h5(args):
         config["nt_params"]["sigma_crit"] = args.sigma_crit
     if args.alpha_sigma is not None:
         config["nt_params"]["alpha_sigma"] = args.alpha_sigma
+    if args.cooling_factor is not None:
+        config["physics"]["cooling_factor"] = args.cooling_factor
+    if args.enable_advection is not None:
+        config["physics"]["enable_advection"] = args.enable_advection == "true"
+    if args.include_3d_diagnostics is not None:
+        config["hdf5_options"]["include_3d_diagnostics"] = args.include_3d_diagnostics == "true"
+
+    run_label = _sanitize_run_label(getattr(args, "run_label", None))
 
     os.makedirs(config["output_directory"], exist_ok=True)
     os.makedirs(config["data_output_directory"], exist_ok=True)
     log_dir = os.path.join(config["output_directory"], "logs")
     os.makedirs(log_dir, exist_ok=True)
 
+    run_timestamp = time.strftime('%Y%m%d_%H%M%S')
+    log_stem = f"main_dsa_{run_label}_{run_timestamp}" if run_label else f"main_dsa_{run_timestamp}"
     logger, log_file = setup_logging(
         log_dir=log_dir,
-        log_name=f"main_dsa_{time.strftime('%Y%m%d_%H%M%S')}.log",
+        log_name=f"{log_stem}.log",
     )
 
     # 记录路径配置信息
@@ -215,16 +234,23 @@ def cmd_generate_h5(args):
     logger.info(f"Metadata output path: {config['output_directory']}")
     logger.info(f"Large-data output path: {config['data_output_directory']}")
     logger.info(f"ipole executable: {config['ipole_executable_path']} (exists: {path_status['ipole_std']['exists']})")
+    logger.info(f"Run label: {run_label or 'none'}")
 
     file_pattern = os.path.join(config["data_directory"], "mad98.prim.*.athdf")
     file_list = sorted(glob.glob(file_pattern))
+    if args.snapshot:
+        snapshot_name = args.snapshot[:-6] if args.snapshot.endswith(".athdf") else args.snapshot
+        expected_name = f"{snapshot_name}.athdf"
+        file_list = [path for path in file_list if os.path.basename(path) == expected_name]
 
     if not file_list:
         logger.error(f"No files found: {file_pattern}")
+        if args.snapshot:
+            logger.error(f"Snapshot filter did not match: {args.snapshot}")
         sys.exit(1)
 
     scratch_root = _resolve_generate_scratch_root(getattr(args, "scratch_dir", None))
-    run_tag = time.strftime("%Y%m%d_%H%M%S")
+    run_tag = f"{run_label}_{run_timestamp}" if run_label else run_timestamp
     scratch_run_dir = os.path.join(scratch_root, f"generate_h5_{run_tag}")
     os.makedirs(scratch_run_dir, exist_ok=True)
 
@@ -285,9 +311,18 @@ def main():
     parser_generate.add_argument("--data-dir", help="Override data directory")
     parser_generate.add_argument("--output-dir", help="Override output directory")
     parser_generate.add_argument("--data-output-dir", help="Override large-data output directory")
+    parser_generate.add_argument("--snapshot", help="Run only one snapshot basename, e.g. mad98.prim.00405")
     parser_generate.add_argument("--n-workers", type=int, help="Number of parallel workers")
     parser_generate.add_argument("--sigma-crit", type=float, help="Sigma suppression critical value")
     parser_generate.add_argument("--alpha-sigma", type=float, help="Sigma suppression steepness")
+    parser_generate.add_argument("--cooling-factor", type=float, help="Override synchrotron cooling factor")
+    parser_generate.add_argument("--enable-advection", choices=["true", "false"], help="Enable or disable advection")
+    parser_generate.add_argument(
+        "--include-3d-diagnostics",
+        choices=["true", "false"],
+        help="Include full 3D diagnostic datasets in the HDF5 output",
+    )
+    parser_generate.add_argument("--run-label", help="Short label embedded in logs and scratch directories")
     parser_generate.add_argument("--scratch-dir", help="Optional local scratch root for temporary generate_h5 input copies")
     parser_generate.add_argument("--show-paths", action="store_true", help="Show path configuration and exit")
     parser_generate.set_defaults(func=cmd_generate_h5)
@@ -300,6 +335,7 @@ def main():
     parser_compare.add_argument("--scratch-dir", help="Optional fast local working directory for temporary compare_models HDF5 files")
     parser_compare.add_argument("--models", nargs="+", choices=["A", "B", "C"], help="Subset of models to run, e.g. --models A")
     parser_compare.add_argument("--ipole-dsa-bin", help="Explicit ipole-DSA binary to use for compare_models")
+    parser_compare.add_argument("--run-label", help="Short label embedded in compare_models logs and plot directories")
     parser_compare.set_defaults(func=cmd_compare_models)
 
     # analyze_electrons 子命令

@@ -56,39 +56,10 @@ def _log_advection_data(logger, name, value, unit=""):
         logger.ai.data(name, value, unit)
 
 
-def _build_radial_transport_coefficients(x1f):
-    r_face = np.ascontiguousarray(x1f, dtype=np.float64)
-    radial_shell = np.maximum(r_face[1:] ** 3 - r_face[:-1] ** 3, _TINY)
-    coeff_in = 3.0 * r_face[:-1] ** 2 / radial_shell
-    coeff_out = 3.0 * r_face[1:] ** 2 / radial_shell
-    return coeff_in, coeff_out
-
-
 def _extract_nonthermal_density(nonthermal_props):
     if "unth_code_grid" in nonthermal_props:
         return np.ascontiguousarray(nonthermal_props["unth_code_grid"], dtype=np.float64)
     return np.ascontiguousarray(nonthermal_props["C_grid"], dtype=np.float64)
-
-
-def _compute_face_speed_line_py(v_line):
-    ni = v_line.shape[0]
-    face_speed = np.empty(ni + 1, dtype=np.float64)
-    face_speed[0] = v_line[0]
-    face_speed[ni] = v_line[-1]
-    if ni > 1:
-        face_speed[1:ni] = 0.5 * (v_line[:-1] + v_line[1:])
-    return face_speed
-
-
-@njit(fastmath=True)
-def _compute_face_speed_line(v_line):
-    ni = v_line.shape[0]
-    face_speed = np.empty(ni + 1, dtype=np.float64)
-    face_speed[0] = v_line[0]
-    face_speed[ni] = v_line[-1]
-    if ni > 1:
-        face_speed[1:ni] = 0.5 * (v_line[:-1] + v_line[1:])
-    return face_speed
 
 
 @njit(fastmath=True)
@@ -96,205 +67,6 @@ def estimate_cooling_time_jit(b_sq_comoving, gamma_char, cooling_factor):
     b_sq_safe = np.maximum(b_sq_comoving, 1.0e-12)
     gamma_safe = np.maximum(gamma_char, 1.0 + 1.0e-6)
     return cooling_factor / (b_sq_safe * gamma_safe)
-
-
-@njit(fastmath=True)
-def _classify_line(face_speed):
-    has_positive = False
-    has_negative = False
-    for idx in range(face_speed.shape[0]):
-        if face_speed[idx] > 0.0:
-            has_positive = True
-        elif face_speed[idx] < 0.0:
-            has_negative = True
-    if has_positive and has_negative:
-        return 2
-    if has_positive:
-        return 1
-    if has_negative:
-        return -1
-    return 0
-
-
-@njit(fastmath=True)
-def _update_radial_cell(
-    line_values,
-    cool_rate_line,
-    face_speed,
-    coeff_in,
-    coeff_out,
-    dirichlet_face_mask,
-    dirichlet_face_value,
-    cell_idx,
-):
-    ni = line_values.shape[0]
-    rhs = 0.0
-    coeff = cool_rate_line[cell_idx]
-
-    u_in = face_speed[cell_idx]
-    if u_in >= 0.0:
-        if dirichlet_face_mask[cell_idx]:
-            neighbor_left = dirichlet_face_value[cell_idx]
-        elif cell_idx == 0:
-            neighbor_left = 0.0
-        else:
-            neighbor_left = line_values[cell_idx - 1]
-        rhs += coeff_in[cell_idx] * u_in * neighbor_left
-    else:
-        coeff += -coeff_in[cell_idx] * u_in
-
-    u_out = face_speed[cell_idx + 1]
-    if u_out < 0.0:
-        if dirichlet_face_mask[cell_idx + 1]:
-            neighbor_right = dirichlet_face_value[cell_idx + 1]
-        elif cell_idx == ni - 1:
-            neighbor_right = 0.0
-        else:
-            neighbor_right = line_values[cell_idx + 1]
-        rhs += -coeff_out[cell_idx] * u_out * neighbor_right
-    else:
-        coeff += coeff_out[cell_idx] * u_out
-
-    if coeff <= _TINY:
-        updated = 0.0 if rhs <= 0.0 else rhs / _TINY
-    else:
-        updated = rhs / coeff
-
-    if updated < 0.0:
-        updated = 0.0
-        return updated, 1
-    return updated, 0
-
-
-@njit(fastmath=True)
-def solve_radial_transport_jit(
-    n_init,
-    cool_rate,
-    v1,
-    coeff_in,
-    coeff_out,
-    dirichlet_face_mask,
-    dirichlet_face_value,
-    line_sweeps,
-):
-    nk, nj, ni = n_init.shape
-    n_out = n_init.copy()
-    clip_count = 0
-    outward_lines = 0
-    inward_lines = 0
-    mixed_lines = 0
-    stagnant_lines = 0
-
-    for k in range(nk):
-        local_clips = 0
-        local_outward = 0
-        local_inward = 0
-        local_mixed = 0
-        local_stagnant = 0
-        for j in range(nj):
-            face_speed = _compute_face_speed_line(v1[k, j, :])
-            line_class = _classify_line(face_speed)
-            if line_class > 0:
-                local_outward += 1
-            elif line_class < 0:
-                local_inward += 1
-            elif line_class == 2:
-                local_mixed += 1
-            elif line_class == 0:
-                local_stagnant += 1
-
-            for sweep in range(line_sweeps):
-                if sweep % 2 == 0:
-                    for i in range(ni):
-                        updated, clipped = _update_radial_cell(
-                            n_out[k, j, :],
-                            cool_rate[k, j, :],
-                            face_speed,
-                            coeff_in,
-                            coeff_out,
-                            dirichlet_face_mask[k, j, :],
-                            dirichlet_face_value[k, j, :],
-                            i,
-                        )
-                        n_out[k, j, i] = updated
-                        local_clips += clipped
-                else:
-                    for i in range(ni - 1, -1, -1):
-                        updated, clipped = _update_radial_cell(
-                            n_out[k, j, :],
-                            cool_rate[k, j, :],
-                            face_speed,
-                            coeff_in,
-                            coeff_out,
-                            dirichlet_face_mask[k, j, :],
-                            dirichlet_face_value[k, j, :],
-                            i,
-                        )
-                        n_out[k, j, i] = updated
-                        local_clips += clipped
-
-        clip_count += local_clips
-        outward_lines += local_outward
-        inward_lines += local_inward
-        mixed_lines += local_mixed
-        stagnant_lines += local_stagnant
-
-    return n_out, clip_count, outward_lines, inward_lines, mixed_lines, stagnant_lines
-
-
-def _compute_residual_stats(
-    solution,
-    cool_rate,
-    v1,
-    coeff_in,
-    coeff_out,
-    dirichlet_face_mask,
-    dirichlet_face_value,
-):
-    nk, nj, ni = solution.shape
-    max_abs_residual = 0.0
-    mean_abs_residual = 0.0
-    sample_count = 0
-
-    for k in range(nk):
-        for j in range(nj):
-            line = solution[k, j, :]
-            face_speed = _compute_face_speed_line(v1[k, j, :])
-            for i in range(ni):
-                u_in = face_speed[i]
-                if u_in >= 0.0:
-                    if dirichlet_face_mask[k, j, i]:
-                        n_left = dirichlet_face_value[k, j, i]
-                    elif i == 0:
-                        n_left = 0.0
-                    else:
-                        n_left = line[i - 1]
-                    flux_in = coeff_in[i] * u_in * n_left
-                else:
-                    flux_in = coeff_in[i] * u_in * line[i]
-
-                u_out = face_speed[i + 1]
-                if u_out >= 0.0:
-                    flux_out = coeff_out[i] * u_out * line[i]
-                else:
-                    if dirichlet_face_mask[k, j, i + 1]:
-                        n_right = dirichlet_face_value[k, j, i + 1]
-                    elif i == ni - 1:
-                        n_right = 0.0
-                    else:
-                        n_right = line[i + 1]
-                    flux_out = coeff_out[i] * u_out * n_right
-
-                residual = (flux_out - flux_in) + cool_rate[k, j, i] * line[i]
-                abs_residual = abs(residual)
-                if abs_residual > max_abs_residual:
-                    max_abs_residual = abs_residual
-                mean_abs_residual += abs_residual
-                sample_count += 1
-
-    if sample_count == 0:
-        return {"max_abs": 0.0, "mean_abs": 0.0}
-    return {"max_abs": max_abs_residual, "mean_abs": mean_abs_residual / sample_count}
 
 
 def _rescale_physical_density(evolved_props, initial_code_density, updated_code_density):
@@ -362,101 +134,95 @@ def _compute_nnth_ratio_summary(roi_data, evolved_props, config):
     }
 
 
-def _build_dirichlet_face_map(shock_props, n_inj, v1):
-    nk, nj, ni = n_inj.shape
-    dirichlet_face_mask = np.zeros((nk, nj, ni + 1), dtype=np.bool_)
-    dirichlet_face_value = np.zeros((nk, nj, ni + 1), dtype=np.float64)
-    mask = np.ascontiguousarray(shock_props.get("mask", np.zeros_like(n_inj, dtype=bool)), dtype=bool)
-    sample_k2 = np.ascontiguousarray(shock_props.get("sample_k2_grid", np.full_like(n_inj, -1, dtype=int)), dtype=int)
-    sample_j2 = np.ascontiguousarray(shock_props.get("sample_j2_grid", np.full_like(n_inj, -1, dtype=int)), dtype=int)
-    sample_i2 = np.ascontiguousarray(shock_props.get("sample_i2_grid", np.full_like(n_inj, -1, dtype=int)), dtype=int)
+def _compute_advection_coverage_diagnostics(
+    updated_density,
+    active_mask,
+    seed_mask,
+    shock_props,
+    n_init,
+    b_sq_comoving,
+    p_eff_grid,
+):
+    shock_mask = np.ascontiguousarray(shock_props.get("mask", np.zeros_like(updated_density, dtype=bool)), dtype=bool)
+    total_shocks = int(np.count_nonzero(shock_mask))
+    total_active = int(np.count_nonzero(active_mask))
+    total_seed = int(np.count_nonzero(seed_mask))
+    if updated_density.size == 0:
+        return {
+            "shock_unth_nonzero_ratio": 0.0,
+            "seed_unth_nonzero_ratio": 0.0,
+            "active_unth_nonzero_ratio": 0.0,
+            "emissivity_weighted_coverage": 0.0,
+        }
 
-    outward_lines = 0
-    inward_lines = 0
-    mixed_lines = 0
-    stagnant_lines = 0
-    outer_boundary_inflow_count = 0
-    same_line_count = 0
-    rejected_nonradial = 0
-    rejected_same_cell = 0
-    rejected_flow_inconsistent = 0
-    rejected_nonpositive_injection = 0
+    threshold = max(float(np.max(updated_density)) * 1.0e-12, 1.0e-30)
+    nonzero_mask = updated_density > threshold
 
-    for k in range(nk):
-        for j in range(nj):
-            face_speed = _compute_face_speed_line_py(v1[k, j, :])
-            line_class = _classify_line(face_speed)
-            if line_class == 2:
-                mixed_lines += 1
-            elif line_class > 0:
-                outward_lines += 1
-            elif line_class < 0:
-                inward_lines += 1
-            else:
-                stagnant_lines += 1
+    shock_unth_nonzero_ratio = (
+        float(np.count_nonzero(nonzero_mask & shock_mask) / total_shocks) if total_shocks else 0.0
+    )
+    seed_unth_nonzero_ratio = (
+        float(np.count_nonzero(nonzero_mask & seed_mask) / total_seed) if total_seed else 0.0
+    )
+    active_unth_nonzero_ratio = (
+        float(np.count_nonzero(nonzero_mask & active_mask) / total_active) if total_active else 0.0
+    )
 
-            if face_speed[0] > 0.0:
-                outer_boundary_inflow_count += 1
-            if face_speed[ni] < 0.0:
-                outer_boundary_inflow_count += 1
+    p_eff = np.ascontiguousarray(p_eff_grid, dtype=np.float64)
+    emissivity_proxy = np.zeros_like(updated_density, dtype=np.float64)
+    power = 0.25 * (np.maximum(p_eff, 1.0) + 1.0)
+    valid_weight_mask = shock_mask & np.isfinite(n_init) & (n_init > 0.0)
+    emissivity_proxy[valid_weight_mask] = (
+        n_init[valid_weight_mask]
+        * np.power(np.maximum(b_sq_comoving[valid_weight_mask], 1.0e-30), power[valid_weight_mask])
+    )
+    total_weight = float(np.sum(emissivity_proxy))
+    covered_weight = float(np.sum(emissivity_proxy[nonzero_mask]))
+    emissivity_weighted_coverage = covered_weight / total_weight if total_weight > 0.0 else 0.0
 
-            shock_indices = np.flatnonzero(mask[k, j, :])
-            for i in shock_indices:
-                kd = int(sample_k2[k, j, i])
-                jd = int(sample_j2[k, j, i])
-                id_ = int(sample_i2[k, j, i])
-                if kd != k or jd != j:
-                    rejected_nonradial += 1
-                    continue
-
-                same_line_count += 1
-                if id_ == i or id_ < 0 or id_ >= ni:
-                    rejected_same_cell += 1
-                    continue
-
-                injection_value = float(n_inj[k, j, i])
-                if injection_value <= 0.0:
-                    rejected_nonpositive_injection += 1
-                    continue
-
-                if id_ > i:
-                    face_idx = i + 1
-                    if face_speed[face_idx] <= 0.0:
-                        rejected_flow_inconsistent += 1
-                        continue
-                else:
-                    face_idx = i
-                    if face_speed[face_idx] >= 0.0:
-                        rejected_flow_inconsistent += 1
-                        continue
-
-                dirichlet_face_mask[k, j, face_idx] = True
-                if injection_value > dirichlet_face_value[k, j, face_idx]:
-                    dirichlet_face_value[k, j, face_idx] = injection_value
-
-    stats = {
-        "dirichlet_faces_total": int(np.count_nonzero(dirichlet_face_mask)),
-        "dirichlet_faces_same_line": int(same_line_count),
-        "dirichlet_faces_rejected_nonradial": int(rejected_nonradial),
-        "dirichlet_faces_rejected_same_cell": int(rejected_same_cell),
-        "dirichlet_faces_rejected_flow_inconsistent": int(rejected_flow_inconsistent),
-        "dirichlet_faces_rejected_nonpositive_injection": int(rejected_nonpositive_injection),
-        "dirichlet_faces_outer_boundary_inflow_count": int(outer_boundary_inflow_count),
-        "line_classification": {
-            "outward": int(outward_lines),
-            "inward": int(inward_lines),
-            "mixed": int(mixed_lines),
-            "stagnant": int(stagnant_lines),
-        },
+    return {
+        "shock_unth_nonzero_ratio": shock_unth_nonzero_ratio,
+        "seed_unth_nonzero_ratio": seed_unth_nonzero_ratio,
+        "active_unth_nonzero_ratio": active_unth_nonzero_ratio,
+        "emissivity_weighted_coverage": emissivity_weighted_coverage,
     }
-    return dirichlet_face_mask, dirichlet_face_value, stats
 
 
-def _build_shock_local_active_region(shock_props, n_inj, physics_cfg):
+def _compute_spherical_cell_volumes(roi_data, shape):
+    r_face = np.ascontiguousarray(roi_data["x1f"], dtype=np.float64)
+    theta_face = np.ascontiguousarray(roi_data["x2f"], dtype=np.float64)
+    phi_face = np.ascontiguousarray(roi_data["x3f"], dtype=np.float64)
+    radial_volume = (r_face[1:] ** 3 - r_face[:-1] ** 3) / 3.0
+    polar_volume = np.cos(theta_face[:-1]) - np.cos(theta_face[1:])
+    azimuthal_volume = phi_face[1:] - phi_face[:-1]
+    volumes = (
+        azimuthal_volume[:, np.newaxis, np.newaxis]
+        * polar_volume[np.newaxis, :, np.newaxis]
+        * radial_volume[np.newaxis, np.newaxis, :]
+    )
+    if volumes.shape != shape:
+        raise ValueError(f"Cell-volume shape {volumes.shape} does not match density shape {shape}")
+    if not np.all(np.isfinite(volumes)) or np.any(volumes <= 0.0):
+        raise ValueError("Invalid spherical cell volumes: all volumes must be finite and positive")
+    return np.ascontiguousarray(volumes, dtype=np.float64)
+
+
+def _build_shock_local_active_region(shock_props, n_inj, physics_cfg, roi_data=None):
+    if roi_data is None:
+        raise ValueError("roi_data is required for budget-preserving shock-local source construction")
+    injection_layer = physics_cfg.get("advection_injection_layer", "downstream_sample")
+    if injection_layer != "downstream_sample":
+        raise ValueError(
+            f"Unsupported advection_injection_layer={injection_layer!r}. "
+            "'downstream_sample' is the only implemented injection layer."
+        )
+    if not np.all(np.isfinite(n_inj)):
+        raise ValueError("Non-finite UNTH input encountered before advection")
+
     nk, nj, ni = n_inj.shape
     active_mask = np.zeros((nk, nj, ni), dtype=np.bool_)
-    seed_mask = np.zeros((nk, nj, ni), dtype=np.bool_)
-    seed_value = np.zeros((nk, nj, ni), dtype=np.float64)
+    source_budget = np.zeros((nk, nj, ni), dtype=np.float64)
+    cell_volume = _compute_spherical_cell_volumes(roi_data, n_inj.shape)
 
     mask = np.ascontiguousarray(shock_props.get("mask", np.zeros_like(n_inj, dtype=bool)), dtype=bool)
     sample_k2 = np.ascontiguousarray(shock_props.get("sample_k2_grid", np.full_like(n_inj, -1, dtype=int)), dtype=int)
@@ -470,7 +236,9 @@ def _build_shock_local_active_region(shock_props, n_inj, physics_cfg):
     shock_count = int(np.count_nonzero(mask))
     valid_seed_samples = 0
     rejected_invalid_sample = 0
+    rejected_same_cell = 0
     rejected_nonpositive_injection = 0
+    input_budget = 0.0
 
     for k, j, i in np.argwhere(mask):
         kd = int(sample_k2[k, j, i])
@@ -479,6 +247,9 @@ def _build_shock_local_active_region(shock_props, n_inj, physics_cfg):
         if not (0 <= kd < nk and 0 <= jd < nj and 0 <= id_ < ni):
             rejected_invalid_sample += 1
             continue
+        if kd == k and jd == j and id_ == i:
+            rejected_same_cell += 1
+            continue
 
         injection_value = float(n_inj[k, j, i])
         if injection_value <= 0.0:
@@ -486,21 +257,33 @@ def _build_shock_local_active_region(shock_props, n_inj, physics_cfg):
             continue
 
         valid_seed_samples += 1
-        seed_mask[kd, jd, id_] = True
-        if injection_value > seed_value[kd, jd, id_]:
-            seed_value[kd, jd, id_] = injection_value
+        injected_number = injection_value * cell_volume[k, j, i]
+        input_budget += injected_number
+        source_budget[kd, jd, id_] += injected_number
 
-        k0 = max(kd - pad_phi, 0)
-        k1 = min(kd + pad_phi + 1, nk)
-        j0 = max(jd - pad_theta, 0)
-        j1 = min(jd + pad_theta + 1, nj)
-        i0 = max(id_ - pad_r, 0)
-        i1 = min(id_ + pad_r + 1, ni)
-        active_mask[k0:k1, j0:j1, i0:i1] = True
+        for ok in range(-pad_phi, pad_phi + 1):
+            kk = (kd + ok) % nk
+            for oj in range(-pad_theta, pad_theta + 1):
+                jj = jd + oj
+                if not (0 <= jj < nj):
+                    continue
+                for oi in range(-pad_r, pad_r + 1):
+                    ii = id_ + oi
+                    if not (0 <= ii < ni):
+                        continue
+                    active_mask[kk, jj, ii] = True
 
-    active_mask |= seed_mask
+    source_density = np.divide(
+        source_budget,
+        cell_volume,
+        out=np.zeros_like(source_budget),
+        where=cell_volume > 0.0,
+    )
+    source_mask = source_density > 0.0
+    active_mask |= source_mask
     active_count = int(np.count_nonzero(active_mask))
-    unique_seed_cells = int(np.count_nonzero(seed_mask))
+    unique_source_cells = int(np.count_nonzero(source_mask))
+    remapped_budget = float(np.sum(source_density * cell_volume))
 
     if active_count > 0:
         kk, jj, ii = np.where(active_mask)
@@ -524,8 +307,10 @@ def _build_shock_local_active_region(shock_props, n_inj, physics_cfg):
     stats = {
         "shock_count": shock_count,
         "seed_samples_valid": int(valid_seed_samples),
-        "seed_cells_unique": unique_seed_cells,
+        "seed_cells_unique": unique_source_cells,
+        "source_cells_unique": unique_source_cells,
         "seed_samples_rejected_invalid": int(rejected_invalid_sample),
+        "seed_samples_rejected_same_cell": int(rejected_same_cell),
         "seed_samples_rejected_nonpositive": int(rejected_nonpositive_injection),
         "active_cell_count": active_count,
         "active_fraction": float(active_count / n_inj.size) if n_inj.size else 0.0,
@@ -533,20 +318,14 @@ def _build_shock_local_active_region(shock_props, n_inj, physics_cfg):
         "pad_r": pad_r,
         "pad_theta": pad_theta,
         "pad_phi": pad_phi,
+        "injection_layer": injection_layer,
+        "source_input_budget": float(input_budget),
+        "source_remapped_budget": remapped_budget,
+        "source_budget_relative_error": (
+            float(abs(remapped_budget - input_budget) / input_budget) if input_budget > 0.0 else 0.0
+        ),
     }
-    return active_mask, seed_mask, seed_value, bbox, stats
-
-
-@njit(fastmath=True)
-def _seed_density(seed_mask, seed_value):
-    density = np.zeros_like(seed_value)
-    nk, nj, ni = seed_mask.shape
-    for k in range(nk):
-        for j in range(nj):
-            for i in range(ni):
-                if seed_mask[k, j, i]:
-                    density[k, j, i] = seed_value[k, j, i]
-    return density
+    return active_mask, source_mask, source_density, bbox, stats
 
 
 @njit(fastmath=True)
@@ -558,11 +337,36 @@ def _neighbor_active_value(values, active_mask, k, j, i):
 
 
 @njit(fastmath=True)
-def _update_local_cell(
+def _compute_cell_crossing_time(
+    u1_hat,
+    u2_hat,
+    u3_hat,
+    dr,
+    dtheta,
+    dphi,
+    r_coords,
+    sin_theta,
+    fallback_time,
+    k,
+    j,
+    i,
+):
+    advective_rate = (
+        abs(u1_hat[k, j, i]) / max(dr[i], _TINY)
+        + abs(u2_hat[k, j, i]) / max(r_coords[i] * dtheta[j], _TINY)
+        + abs(u3_hat[k, j, i]) / max(r_coords[i] * sin_theta[j] * dphi[k], _TINY)
+    )
+    if advective_rate <= _TINY:
+        return fallback_time
+    return 1.0 / advective_rate
+
+
+@njit(fastmath=True)
+def _update_relaxation_cell(
     values,
     active_mask,
-    seed_mask,
-    seed_value,
+    source_density,
+    source_mask,
     cool_rate,
     u1_hat,
     u2_hat,
@@ -572,50 +376,73 @@ def _update_local_cell(
     dphi,
     r_coords,
     sin_theta,
+    tau_inj_fraction,
+    fallback_crossing_time,
     k,
     j,
     i,
 ):
-    coeff = cool_rate[k, j, i]
-    rhs = 0.0
-
     inv_dr = 1.0 / max(dr[i], _TINY)
     inv_dtheta = 1.0 / max(r_coords[i] * dtheta[j], _TINY)
     inv_dphi = 1.0 / max(r_coords[i] * sin_theta[j] * dphi[k], _TINY)
 
+    weight_r = 0.0
+    rhs_r = 0.0
     ur = u1_hat[k, j, i]
     if ur >= 0.0:
-        rhs += ur * inv_dr * _neighbor_active_value(values, active_mask, k, j, i - 1)
-        coeff += ur * inv_dr
+        weight_r = ur * inv_dr
+        rhs_r = weight_r * _neighbor_active_value(values, active_mask, k, j, i - 1)
     else:
-        rhs += (-ur) * inv_dr * _neighbor_active_value(values, active_mask, k, j, i + 1)
-        coeff += (-ur) * inv_dr
+        weight_r = (-ur) * inv_dr
+        rhs_r = weight_r * _neighbor_active_value(values, active_mask, k, j, i + 1)
 
+    weight_theta = 0.0
+    rhs_theta = 0.0
     uth = u2_hat[k, j, i]
     if uth >= 0.0:
-        rhs += uth * inv_dtheta * _neighbor_active_value(values, active_mask, k, j - 1, i)
-        coeff += uth * inv_dtheta
+        weight_theta = uth * inv_dtheta
+        rhs_theta = weight_theta * _neighbor_active_value(values, active_mask, k, j - 1, i)
     else:
-        rhs += (-uth) * inv_dtheta * _neighbor_active_value(values, active_mask, k, j + 1, i)
-        coeff += (-uth) * inv_dtheta
+        weight_theta = (-uth) * inv_dtheta
+        rhs_theta = weight_theta * _neighbor_active_value(values, active_mask, k, j + 1, i)
 
+    weight_phi = 0.0
+    rhs_phi = 0.0
     uph = u3_hat[k, j, i]
     k_prev = k - 1 if k > 0 else values.shape[0] - 1
     k_next = k + 1 if k + 1 < values.shape[0] else 0
     if uph >= 0.0:
-        rhs += uph * inv_dphi * _neighbor_active_value(values, active_mask, k_prev, j, i)
-        coeff += uph * inv_dphi
+        weight_phi = uph * inv_dphi
+        rhs_phi = weight_phi * _neighbor_active_value(values, active_mask, k_prev, j, i)
     else:
-        rhs += (-uph) * inv_dphi * _neighbor_active_value(values, active_mask, k_next, j, i)
-        coeff += (-uph) * inv_dphi
+        weight_phi = (-uph) * inv_dphi
+        rhs_phi = weight_phi * _neighbor_active_value(values, active_mask, k_next, j, i)
 
-    if coeff <= _TINY:
-        updated = 0.0
-    else:
-        updated = rhs / coeff
+    total_weight = weight_r + weight_theta + weight_phi
+    rhs = rhs_r + rhs_theta + rhs_phi
+    coeff = cool_rate[k, j, i] + total_weight
 
-    if seed_mask[k, j, i] and updated < seed_value[k, j, i]:
-        updated = seed_value[k, j, i]
+    if source_mask[k, j, i]:
+        tau_cross = _compute_cell_crossing_time(
+            u1_hat,
+            u2_hat,
+            u3_hat,
+            dr,
+            dtheta,
+            dphi,
+            r_coords,
+            sin_theta,
+            fallback_crossing_time,
+            k,
+            j,
+            i,
+        )
+        tau_inj = tau_inj_fraction * tau_cross
+        inj_rate = 1.0 / tau_inj
+        coeff += inj_rate
+        rhs += inj_rate * source_density[k, j, i]
+
+    updated = 0.0 if coeff <= _TINY else rhs / coeff
 
     if updated < 0.0:
         return 0.0, 1
@@ -623,10 +450,10 @@ def _update_local_cell(
 
 
 @njit(fastmath=True)
-def solve_shock_local_transport_jit(
+def solve_shock_local_relaxation_jit(
     active_mask,
-    seed_mask,
-    seed_value,
+    source_density,
+    source_mask,
     cool_rate,
     u1_hat,
     u2_hat,
@@ -637,6 +464,8 @@ def solve_shock_local_transport_jit(
     r_coords,
     sin_theta,
     line_sweeps,
+    tau_inj_fraction,
+    fallback_crossing_time,
     k_min,
     k_max,
     j_min,
@@ -644,7 +473,7 @@ def solve_shock_local_transport_jit(
     i_min,
     i_max,
 ):
-    values = _seed_density(seed_mask, seed_value)
+    values = np.zeros_like(source_density)
     clip_count = 0
 
     if k_max < k_min or j_max < j_min or i_max < i_min:
@@ -665,11 +494,11 @@ def solve_shock_local_transport_jit(
                 for i in i_range:
                     if not active_mask[k, j, i]:
                         continue
-                    updated, clipped = _update_local_cell(
+                    updated, clipped = _update_relaxation_cell(
                         values,
                         active_mask,
-                        seed_mask,
-                        seed_value,
+                        source_density,
+                        source_mask,
                         cool_rate,
                         u1_hat,
                         u2_hat,
@@ -679,6 +508,8 @@ def solve_shock_local_transport_jit(
                         dphi,
                         r_coords,
                         sin_theta,
+                        tau_inj_fraction,
+                        fallback_crossing_time,
                         k,
                         j,
                         i,
@@ -692,8 +523,8 @@ def solve_shock_local_transport_jit(
 def _compute_shock_local_residual_stats(
     solution,
     active_mask,
-    seed_mask,
-    seed_value,
+    source_density,
+    source_mask,
     cool_rate,
     u1_hat,
     u2_hat,
@@ -703,6 +534,8 @@ def _compute_shock_local_residual_stats(
     dphi,
     r_coords,
     sin_theta,
+    tau_inj_fraction,
+    fallback_crossing_time,
     bbox,
 ):
     if bbox["k_max"] < bbox["k_min"]:
@@ -715,35 +548,29 @@ def _compute_shock_local_residual_stats(
     for k in range(bbox["k_min"], bbox["k_max"] + 1):
         for j in range(bbox["j_min"], bbox["j_max"] + 1):
             for i in range(bbox["i_min"], bbox["i_max"] + 1):
-                if not active_mask[k, j, i] or seed_mask[k, j, i]:
+                if not active_mask[k, j, i]:
                     continue
-
-                inv_dr = 1.0 / max(dr[i], _TINY)
-                inv_dtheta = 1.0 / max(r_coords[i] * dtheta[j], _TINY)
-                inv_dphi = 1.0 / max(r_coords[i] * sin_theta[j] * dphi[k], _TINY)
-
-                ur = u1_hat[k, j, i]
-                if ur >= 0.0:
-                    radial = ur * inv_dr * (solution[k, j, i] - _neighbor_active_value(solution, active_mask, k, j, i - 1))
-                else:
-                    radial = (-ur) * inv_dr * (solution[k, j, i] - _neighbor_active_value(solution, active_mask, k, j, i + 1))
-
-                uth = u2_hat[k, j, i]
-                if uth >= 0.0:
-                    polar = uth * inv_dtheta * (solution[k, j, i] - _neighbor_active_value(solution, active_mask, k, j - 1, i))
-                else:
-                    polar = (-uth) * inv_dtheta * (solution[k, j, i] - _neighbor_active_value(solution, active_mask, k, j + 1, i))
-
-                uph = u3_hat[k, j, i]
-                k_prev = k - 1 if k > 0 else solution.shape[0] - 1
-                k_next = k + 1 if k + 1 < solution.shape[0] else 0
-                if uph >= 0.0:
-                    azimuthal = uph * inv_dphi * (solution[k, j, i] - _neighbor_active_value(solution, active_mask, k_prev, j, i))
-                else:
-                    azimuthal = (-uph) * inv_dphi * (solution[k, j, i] - _neighbor_active_value(solution, active_mask, k_next, j, i))
-
-                residual = radial + polar + azimuthal + cool_rate[k, j, i] * solution[k, j, i]
-                abs_residual = abs(residual)
+                updated, _ = _update_relaxation_cell(
+                    solution,
+                    active_mask,
+                    source_density,
+                    source_mask,
+                    cool_rate,
+                    u1_hat,
+                    u2_hat,
+                    u3_hat,
+                    dr,
+                    dtheta,
+                    dphi,
+                    r_coords,
+                    sin_theta,
+                    tau_inj_fraction,
+                    fallback_crossing_time,
+                    k,
+                    j,
+                    i,
+                )
+                abs_residual = abs(updated - solution[k, j, i])
                 if abs_residual > max_abs:
                     max_abs = abs_residual
                 mean_abs += abs_residual
@@ -768,6 +595,19 @@ def _validate_advection_model(config):
         raise ValueError(
             f"Unsupported advection_cooling_model={cooling_model!r}. "
             "'synchrotron_local_sink' is the only implemented cooling closure."
+        )
+
+    injection_layer = physics_cfg.get("advection_injection_layer", "downstream_sample")
+    if injection_layer != "downstream_sample":
+        raise ValueError(
+            f"Unsupported advection_injection_layer={injection_layer!r}. "
+            "'downstream_sample' is the only implemented injection layer."
+        )
+
+    tau_fraction = float(physics_cfg.get("advection_tau_inj_cell_crossing_fraction", 1.0e-3))
+    if not np.isfinite(tau_fraction) or tau_fraction <= 0.0:
+        raise ValueError(
+            "physics.advection_tau_inj_cell_crossing_fraction must be finite and positive"
         )
 
     return advection_model, cooling_model
@@ -796,21 +636,27 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
         nonthermal_props.get("gamma_min_grid", np.ones_like(n_init)),
         dtype=np.float64,
     )
+    p_eff_grid = np.ascontiguousarray(
+        nonthermal_props.get("p_eff_grid", np.full_like(n_init, 3.0)),
+        dtype=np.float64,
+    )
     v1 = np.ascontiguousarray(roi_data["vel1"], dtype=np.float64)
     _log_advection_data(logger, "advection.n_init", n_init)
     _log_advection_data(logger, "advection.gamma_min_grid", gamma_min_grid)
+    _log_advection_data(logger, "advection.p_eff_grid", p_eff_grid)
     _log_advection_data(logger, "advection.vel1", v1)
     initial_summary = _compute_code_density_summary(n_init)
     _log_advection_data(logger, "advection.unth_initial_summary", initial_summary)
 
-    _log_advection_codepath(logger, "Advection checkpoint", "build shock-local active region")
-    active_mask, seed_mask, seed_value, bbox, active_stats = _build_shock_local_active_region(
+    _log_advection_codepath(logger, "Advection checkpoint", "build shock-local relaxation source")
+    active_mask, source_mask, source_density, bbox, active_stats = _build_shock_local_active_region(
         shock_props,
         n_init,
         physics_cfg,
+        roi_data=roi_data,
     )
     _log_advection_data(logger, "advection.active_region_stats", active_stats)
-    _log_advection_data(logger, "advection.seed_values", seed_value[seed_mask])
+    _log_advection_data(logger, "advection.source_density", source_density[source_mask])
 
     _log_advection_codepath(logger, "Advection checkpoint", "compute comoving magnetic geometry")
     magnetic_geom = compute_comoving_magnetic_geometry(roi_data)
@@ -822,12 +668,15 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
     gamma_floor = float(physics_cfg.get("gamma_cool_floor", 1.0e-3))
     gamma_char = np.maximum(gamma_min_grid, 1.0 + gamma_floor)
     cooling_factor = float(physics_cfg.get("cooling_factor", 50.0))
+    tau_inj_fraction = float(physics_cfg.get("advection_tau_inj_cell_crossing_fraction", 1.0e-3))
     _log_advection_debug(
         logger,
         (
             "    Advection config summary: "
             f"gamma_floor={gamma_floor:.3e}, cooling_factor={cooling_factor:.3e}, "
-            f"line_sweeps={int(physics_cfg.get('advection_line_sweeps', 6))}"
+            f"line_sweeps={int(physics_cfg.get('advection_line_sweeps', 6))}, "
+            f"tau_inj_cell_crossing_fraction={tau_inj_fraction:.3e}, "
+            f"injection_layer={physics_cfg.get('advection_injection_layer', 'downstream_sample')}"
         ),
     )
 
@@ -839,6 +688,8 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
         out=np.zeros_like(tau_cool_eff),
         where=tau_cool_eff > 0.0,
     )
+    if not np.all(np.isfinite(cool_rate)) or np.any(cool_rate < 0.0):
+        raise ValueError("Invalid cooling rate: all entries must be finite and non-negative")
     _log_advection_data(logger, "advection.gamma_char", gamma_char)
     _log_advection_data(logger, "advection.tau_cool_eff", tau_cool_eff)
     _log_advection_data(logger, "advection.cool_rate", cool_rate)
@@ -852,9 +703,17 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
     r_coords = np.ascontiguousarray(0.5 * (roi_data["x1f"][:-1] + roi_data["x1f"][1:]), dtype=np.float64)
     theta_coords = np.ascontiguousarray(0.5 * (roi_data["x2f"][:-1] + roi_data["x2f"][1:]), dtype=np.float64)
     sin_theta = np.ascontiguousarray(np.maximum(np.sin(theta_coords), 1.0e-12), dtype=np.float64)
+    if np.any(dr <= 0.0) or np.any(dtheta <= 0.0) or np.any(dphi <= 0.0):
+        raise ValueError("Invalid grid spacing: x1f/x2f/x3f must be strictly increasing")
+    min_physical_width = min(
+        float(np.min(dr)),
+        float(np.min(r_coords[:, np.newaxis] * dtheta[np.newaxis, :])),
+        float(np.min(r_coords[:, np.newaxis] * sin_theta[np.newaxis, :] * np.min(dphi))),
+    )
+    fallback_crossing_time = max(min_physical_width, _TINY)
 
     nk, nj, ni = n_init.shape
-    _log_advection_debug(logger, ">>> [Advection-SR] Solving shock-local sparse relativistic transport...")
+    _log_advection_debug(logger, ">>> [Advection-SR] Solving shock-local finite-volume relaxation transport...")
     _log_advection_debug(
         logger,
         f"    Model={advection_model}, Cooling={cooling_model}, Domain=shock_local, "
@@ -867,18 +726,25 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
         f"cells={active_stats['active_cell_count']}, "
         f"fraction={active_stats['active_fraction']:.3e}, "
         f"seed_samples_valid={active_stats['seed_samples_valid']}, "
-        f"seed_cells_unique={active_stats['seed_cells_unique']}, "
+        f"source_cells_unique={active_stats['source_cells_unique']}, "
         f"bbox_shape={tuple(active_stats['bbox_shape'])}",
+    )
+    _log_advection_debug(
+        logger,
+        "    Source budget: "
+        f"input={active_stats['source_input_budget']:.3e}, "
+        f"remapped={active_stats['source_remapped_budget']:.3e}, "
+        f"relative_error={active_stats['source_budget_relative_error']:.3e}",
     )
     _log_advection_debug(logger, f"    gamma_char stats: {_format_stat_triplet(gamma_char)}")
     _log_advection_debug(logger, f"    tau_cool_eff stats: {_format_stat_triplet(tau_cool_eff)}")
 
     try:
-        _log_advection_codepath(logger, "Advection checkpoint", "enter solve_shock_local_transport_jit")
-        updated_density, clip_count = solve_shock_local_transport_jit(
+        _log_advection_codepath(logger, "Advection checkpoint", "enter solve_shock_local_relaxation_jit")
+        updated_density, clip_count = solve_shock_local_relaxation_jit(
             active_mask,
-            seed_mask,
-            seed_value,
+            source_density,
+            source_mask,
             cool_rate,
             u1_hat,
             u2_hat,
@@ -889,6 +755,8 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
             r_coords,
             sin_theta,
             line_sweeps,
+            tau_inj_fraction,
+            fallback_crossing_time,
             bbox["k_min"],
             bbox["k_max"],
             bbox["j_min"],
@@ -896,7 +764,7 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
             bbox["i_min"],
             bbox["i_max"],
         )
-        _log_advection_codepath(logger, "Advection checkpoint", "solve_shock_local_transport_jit completed")
+        _log_advection_codepath(logger, "Advection checkpoint", "solve_shock_local_relaxation_jit completed")
     except Exception as exc:
         _log_advection_debug(
             logger,
@@ -909,8 +777,8 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
     residual_stats = _compute_shock_local_residual_stats(
         updated_density,
         active_mask,
-        seed_mask,
-        seed_value,
+        source_density,
+        source_mask,
         cool_rate,
         u1_hat,
         u2_hat,
@@ -920,6 +788,8 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
         dphi,
         r_coords,
         sin_theta,
+        tau_inj_fraction,
+        fallback_crossing_time,
         bbox,
     )
 
@@ -933,17 +803,75 @@ def solve_steady_advection(roi_data, shock_props_or_nonthermal, nonthermal_props
     _log_advection_data(logger, "advection.updated_density", updated_density)
     updated_summary = _compute_code_density_summary(updated_density)
     _log_advection_data(logger, "advection.unth_final_summary", updated_summary)
+    coverage_diagnostics = _compute_advection_coverage_diagnostics(
+        updated_density,
+        active_mask,
+        source_mask,
+        shock_props,
+        n_init,
+        b_sq_comoving,
+        p_eff_grid,
+    )
+    _log_advection_data(logger, "advection.coverage_diagnostics", coverage_diagnostics)
     _log_advection_debug(
         logger,
         "    Residual stats: "
         f"max_abs={residual_stats['max_abs']:.3e}, mean_abs={residual_stats['mean_abs']:.3e}, "
         f"negative_clips={clip_count}",
     )
+    _log_advection_debug(
+        logger,
+        "    Coverage diagnostics: "
+        f"shock_unth_nonzero_ratio={coverage_diagnostics['shock_unth_nonzero_ratio']:.3e}, "
+        f"seed_unth_nonzero_ratio={coverage_diagnostics['seed_unth_nonzero_ratio']:.3e}, "
+        f"active_unth_nonzero_ratio={coverage_diagnostics['active_unth_nonzero_ratio']:.3e}, "
+        f"emissivity_weighted_coverage={coverage_diagnostics['emissivity_weighted_coverage']:.3e}",
+    )
 
     evolved_props = copy.deepcopy(nonthermal_props)
     evolved_props["unth_code_grid"] = updated_density
     evolved_props["C_grid"] = updated_density
-    _rescale_physical_density(evolved_props, n_init, updated_density)
+    evolved_props["advection_active_region_stats"] = active_stats
+    evolved_props["advection_coverage_diagnostics"] = coverage_diagnostics
+    if "n_nth_phys_grid" in nonthermal_props:
+        phys_init = np.ascontiguousarray(nonthermal_props["n_nth_phys_grid"], dtype=np.float64)
+        _, phys_source_mask, phys_source_density, _, phys_active_stats = _build_shock_local_active_region(
+            shock_props,
+            phys_init,
+            physics_cfg,
+            roi_data=roi_data,
+        )
+        if not np.array_equal(phys_source_mask, source_mask):
+            raise ValueError("Physical and code-unit advection source masks diverged")
+        updated_phys, phys_clip_count = solve_shock_local_relaxation_jit(
+            active_mask,
+            phys_source_density,
+            phys_source_mask,
+            cool_rate,
+            u1_hat,
+            u2_hat,
+            u3_hat,
+            dr,
+            dtheta,
+            dphi,
+            r_coords,
+            sin_theta,
+            line_sweeps,
+            tau_inj_fraction,
+            fallback_crossing_time,
+            bbox["k_min"],
+            bbox["k_max"],
+            bbox["j_min"],
+            bbox["j_max"],
+            bbox["i_min"],
+            bbox["i_max"],
+        )
+        evolved_props["n_nth_phys_grid"] = updated_phys
+        _log_advection_data(logger, "advection.physical_source_stats", phys_active_stats)
+        if phys_clip_count:
+            _log_advection_debug(logger, f"    Physical density negative clips={phys_clip_count}")
+    else:
+        _rescale_physical_density(evolved_props, n_init, updated_density)
     ratio_summary = _compute_nnth_ratio_summary(roi_data, evolved_props, config)
     if ratio_summary is not None:
         _log_advection_data(logger, "advection.n_nth_over_n_e_summary", ratio_summary)
